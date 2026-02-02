@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use moon_bytecode::{FuncId, Instr, Module};
+use moon_bytecode::{FuncId, InstrKind, Module};
+use moon_core::span::Span;
 use moon_runtime::{Heap, Value};
 
 use crate::error::VmError;
@@ -20,6 +21,7 @@ pub struct Vm {
     globals: HashMap<String, Value>,
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    current_span: Span,
 }
 
 impl Vm {
@@ -30,6 +32,7 @@ impl Vm {
             globals: HashMap::new(),
             stack: Vec::new(),
             frames: Vec::new(),
+            current_span: Span::new(0, 0),
         }
     }
 
@@ -47,161 +50,137 @@ impl Vm {
             let func_id = self.frames[frame_idx].func;
             let ip = self.frames[frame_idx].ip;
 
-            let func = self.module.get_func(func_id).ok_or_else(|| VmError {
-                message: "invalid function id".to_string(),
+            let func = self.module.get_func(func_id).ok_or_else(|| {
+                VmError::new("invalid function id".to_string(), self.current_span)
             })?;
 
             if ip >= func.code.len() {
-                return Err(VmError {
-                    message: format!("instruction pointer out of bounds in {}", func.name),
-                });
+                return Err(VmError::new(
+                    format!("instruction pointer out of bounds in {}", func.name),
+                    self.current_span,
+                ));
             }
 
             let instr = func.code[ip].clone();
             self.frames[frame_idx].ip += 1;
+            self.current_span = instr.span;
 
-            match instr {
-                Instr::Push(v) => self.stack.push(v),
-                Instr::Pop => {
-                    self.stack.pop().ok_or_else(|| VmError {
-                        message: "stack underflow".to_string(),
-                    })?;
+            match instr.kind {
+                InstrKind::Push(v) => self.stack.push(v),
+                InstrKind::Pop => {
+                    self.stack
+                        .pop()
+                        .ok_or_else(|| self.err("stack underflow"))?;
                 }
-                Instr::PushScope => self.frames[frame_idx].scopes.push(HashMap::new()),
-                Instr::PopScope => {
-                    self.frames[frame_idx].scopes.pop().ok_or_else(|| VmError {
-                        message: "scope underflow".to_string(),
-                    })?;
+
+                InstrKind::PushScope => self.frames[frame_idx].scopes.push(HashMap::new()),
+                InstrKind::PopScope => {
+                    self.frames[frame_idx]
+                        .scopes
+                        .pop()
+                        .ok_or_else(|| self.err("scope underflow"))?;
                 }
-                Instr::LoadVar(name) => {
-                    let v = self.get_var(frame_idx, &name).ok_or_else(|| VmError {
-                        message: format!("undefined variable: {name}"),
-                    })?;
+
+                InstrKind::LoadVar(name) => {
+                    let v = self
+                        .get_var(frame_idx, &name)
+                        .ok_or_else(|| self.err(format!("undefined variable: {name}")))?;
                     self.stack.push(v);
                 }
-                Instr::DefineVar(name) => {
-                    let v = self.stack.pop().ok_or_else(|| VmError {
-                        message: "stack underflow".to_string(),
-                    })?;
+                InstrKind::DefineVar(name) => {
+                    let v = self.pop()?;
                     self.define_var(frame_idx, name, v);
                 }
-                Instr::SetVar(name) => {
-                    let v = self.stack.pop().ok_or_else(|| VmError {
-                        message: "stack underflow".to_string(),
-                    })?;
+                InstrKind::SetVar(name) => {
+                    let v = self.pop()?;
                     self.set_var(frame_idx, &name, v)?;
                 }
 
-                Instr::Neg => {
+                InstrKind::Neg => {
                     let v = self.pop()?;
                     match v {
                         Value::Int(i) => self.stack.push(Value::Int(-i)),
                         other => {
-                            return Err(VmError {
-                                message: format!("cannot apply unary '-' to {other:?}"),
-                            })
+                            return Err(self.err(format!("cannot apply unary '-' to {other:?}")))
                         }
                     }
                 }
-                Instr::Not => {
+                InstrKind::Not => {
                     let v = self.pop()?;
                     match v {
                         Value::Bool(b) => self.stack.push(Value::Bool(!b)),
                         other => {
-                            return Err(VmError {
-                                message: format!("cannot apply unary '!' to {other:?}"),
-                            })
+                            return Err(self.err(format!("cannot apply unary '!' to {other:?}")))
                         }
                     }
                 }
 
-                Instr::Add => self.bin_add()?,
-                Instr::Sub => self.bin_int(|a, b| a - b, "subtract")?,
-                Instr::Mul => self.bin_int(|a, b| a * b, "multiply")?,
-                Instr::Div => {
+                InstrKind::Add => self.bin_add()?,
+                InstrKind::Sub => self.bin_int(|a, b| a - b, "subtract")?,
+                InstrKind::Mul => self.bin_int(|a, b| a * b, "multiply")?,
+                InstrKind::Div => {
                     let (a, b) = self.pop_two_ints()?;
                     if b == 0 {
-                        return Err(VmError {
-                            message: "division by zero".to_string(),
-                        });
+                        return Err(self.err("division by zero"));
                     }
                     self.stack.push(Value::Int(a / b));
                 }
-                Instr::Mod => {
+                InstrKind::Mod => {
                     let (a, b) = self.pop_two_ints()?;
                     if b == 0 {
-                        return Err(VmError {
-                            message: "modulo by zero".to_string(),
-                        });
+                        return Err(self.err("modulo by zero"));
                     }
                     self.stack.push(Value::Int(a % b));
                 }
+                InstrKind::Eq => self.bin_eq(true)?,
+                InstrKind::Ne => self.bin_eq(false)?,
+                InstrKind::Lt => self.bin_cmp(|a, b| a < b, "<")?,
+                InstrKind::Le => self.bin_cmp(|a, b| a <= b, "<=")?,
+                InstrKind::Gt => self.bin_cmp(|a, b| a > b, ">")?,
+                InstrKind::Ge => self.bin_cmp(|a, b| a >= b, ">=")?,
 
-                Instr::Eq => self.bin_eq(true)?,
-                Instr::Ne => self.bin_eq(false)?,
-                Instr::Lt => self.bin_cmp(|a, b| a < b, "<")?,
-                Instr::Le => self.bin_cmp(|a, b| a <= b, "<=")?,
-                Instr::Gt => self.bin_cmp(|a, b| a > b, ">")?,
-                Instr::Ge => self.bin_cmp(|a, b| a >= b, ">=")?,
-
-                Instr::Jump(dst) => self.frames[frame_idx].ip = dst,
-                Instr::JumpIfFalse(dst) => {
-                    let cond = match self.peek()? {
-                        Value::Bool(b) => *b,
+                InstrKind::Jump(dst) => self.frames[frame_idx].ip = dst,
+                InstrKind::JumpIfFalse(dst) => {
+                    let v = self.peek()?.clone();
+                    match v {
+                        Value::Bool(false) => self.frames[frame_idx].ip = dst,
+                        Value::Bool(true) => {}
                         other => {
-                            return Err(VmError {
-                                message: format!("JumpIfFalse expects bool, got {other:?}"),
-                            })
+                            return Err(self.err(format!("expected bool condition, got {other:?}")))
                         }
-                    };
-                    if !cond {
-                        self.frames[frame_idx].ip = dst;
                     }
                 }
-                Instr::JumpIfTrue(dst) => {
-                    let cond = match self.peek()? {
-                        Value::Bool(b) => *b,
+                InstrKind::JumpIfTrue(dst) => {
+                    let v = self.peek()?.clone();
+                    match v {
+                        Value::Bool(true) => self.frames[frame_idx].ip = dst,
+                        Value::Bool(false) => {}
                         other => {
-                            return Err(VmError {
-                                message: format!("JumpIfTrue expects bool, got {other:?}"),
-                            })
+                            return Err(self.err(format!("expected bool condition, got {other:?}")))
                         }
-                    };
-                    if cond {
-                        self.frames[frame_idx].ip = dst;
                     }
                 }
 
-                Instr::Call(id, argc) => {
-                    // Evaluate arguments are already on the stack.
-                    let func = self.module.get_func(id).ok_or_else(|| VmError {
-                        message: "invalid function id".to_string(),
-                    })?;
+                InstrKind::Call(id, argc) => {
+                    let func_obj = self
+                        .module
+                        .get_func(id)
+                        .ok_or_else(|| self.err("invalid function id"))?;
 
-                    // Builtins
-                    if func.name == "gc" {
+                    // Builtins are treated like normal functions in bytecode, but executed by the VM.
+                    if func_obj.name == "gc" {
+                        // No args.
                         if argc != 0 {
-                            return Err(VmError {
-                                message: "gc() takes no arguments".to_string(),
-                            });
+                            return Err(self.err("gc() takes no arguments"));
                         }
+
                         let roots = self.roots();
                         let _ = self.heap.collect_garbage(&roots);
                         self.stack.push(Value::Unit);
                         continue;
                     }
 
-                    if argc != func.params.len() {
-                        return Err(VmError {
-                            message: format!(
-                                "wrong number of arguments for {}: expected {}, got {}",
-                                func.name,
-                                func.params.len(),
-                                argc
-                            ),
-                        });
-                    }
-
+                    // Pop arguments from the stack.
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
                         args.push(self.pop()?);
@@ -212,7 +191,7 @@ impl Vm {
                     self.push_call_frame(id, stack_base, args)?;
                 }
 
-                Instr::Return => {
+                InstrKind::Return => {
                     let ret = self.pop()?;
                     let frame = self.frames.pop().expect("frame exists");
                     self.stack.truncate(frame.stack_base);
@@ -224,7 +203,7 @@ impl Vm {
                     self.stack.push(ret);
                 }
 
-                Instr::MakeArray(n) => {
+                InstrKind::MakeArray(n) => {
                     let mut elems = Vec::with_capacity(n);
                     for _ in 0..n {
                         elems.push(self.pop()?);
@@ -233,7 +212,7 @@ impl Vm {
                     let h = self.heap.alloc_array(elems);
                     self.stack.push(Value::Array(h));
                 }
-                Instr::MakeObject(keys) => {
+                InstrKind::MakeObject(keys) => {
                     let n = keys.len();
                     let mut values = Vec::with_capacity(n);
                     for _ in 0..n {
@@ -247,13 +226,13 @@ impl Vm {
                     let h = self.heap.alloc_object(map);
                     self.stack.push(Value::Object(h));
                 }
-                Instr::IndexGet => {
+                InstrKind::IndexGet => {
                     let index = self.pop()?;
                     let base = self.pop()?;
                     let v = self.index_get(base, index)?;
                     self.stack.push(v);
                 }
-                Instr::IndexSet => {
+                InstrKind::IndexSet => {
                     let value = self.pop()?;
                     let index = self.pop()?;
                     let base = self.pop()?;
@@ -263,15 +242,20 @@ impl Vm {
         }
     }
 
+    fn err(&self, message: impl Into<String>) -> VmError {
+        VmError::new(message, self.current_span)
+    }
+
     fn push_call_frame(
         &mut self,
         func: FuncId,
         stack_base: usize,
         args: Vec<Value>,
     ) -> Result<(), VmError> {
-        let func_obj = self.module.get_func(func).ok_or_else(|| VmError {
-            message: "invalid function id".to_string(),
-        })?;
+        let func_obj = self
+            .module
+            .get_func(func)
+            .ok_or_else(|| self.err("invalid function id"))?;
 
         let mut scope = HashMap::new();
         for (name, value) in func_obj.params.iter().cloned().zip(args) {
@@ -315,21 +299,15 @@ impl Vm {
             self.globals.insert(name.to_string(), value);
             return Ok(());
         }
-        Err(VmError {
-            message: format!("undefined variable: {name}"),
-        })
+        Err(self.err(format!("undefined variable: {name}")))
     }
 
     fn peek(&self) -> Result<&Value, VmError> {
-        self.stack.last().ok_or_else(|| VmError {
-            message: "stack underflow".to_string(),
-        })
+        self.stack.last().ok_or_else(|| self.err("stack underflow"))
     }
 
     fn pop(&mut self) -> Result<Value, VmError> {
-        self.stack.pop().ok_or_else(|| VmError {
-            message: "stack underflow".to_string(),
-        })
+        self.stack.pop().ok_or_else(|| self.err("stack underflow"))
     }
 
     fn pop_two_ints(&mut self) -> Result<(i64, i64), VmError> {
@@ -337,9 +315,7 @@ impl Vm {
         let a = self.pop()?;
         match (a, b) {
             (Value::Int(a), Value::Int(b)) => Ok((a, b)),
-            (a, b) => Err(VmError {
-                message: format!("expected two ints, got {a:?} and {b:?}"),
-            }),
+            (a, b) => Err(self.err(format!("expected two ints, got {a:?} and {b:?}"))),
         }
     }
 
@@ -361,9 +337,7 @@ impl Vm {
                 self.stack.push(Value::String(format!("{a}{b}")));
                 Ok(())
             }
-            (a, b) => Err(VmError {
-                message: format!("cannot add {a:?} and {b:?}"),
-            }),
+            (a, b) => Err(self.err(format!("cannot add {a:?} and {b:?}"))),
         }
     }
 
@@ -385,38 +359,31 @@ impl Vm {
         match base {
             Value::Array(h) => {
                 let idx = match index {
-                    Value::Int(i) => usize::try_from(i).map_err(|_| VmError {
-                        message: "array index must be >= 0".to_string(),
-                    })?,
+                    Value::Int(i) => {
+                        usize::try_from(i).map_err(|_| self.err("array index must be >= 0"))?
+                    }
                     other => {
-                        return Err(VmError {
-                            message: format!("array index must be int, got {other:?}"),
-                        })
+                        return Err(self.err(format!("array index must be int, got {other:?}")))
                     }
                 };
-                self.heap.array_get(h, idx).cloned().ok_or_else(|| VmError {
-                    message: format!("index out of bounds: {idx}"),
-                })
+                self.heap
+                    .array_get(h, idx)
+                    .cloned()
+                    .ok_or_else(|| self.err(format!("index out of bounds: {idx}")))
             }
             Value::Object(h) => {
                 let key = match index {
                     Value::String(s) => s,
                     other => {
-                        return Err(VmError {
-                            message: format!("object key must be string, got {other:?}"),
-                        })
+                        return Err(self.err(format!("object key must be string, got {other:?}")))
                     }
                 };
                 self.heap
                     .object_get(h, &key)
                     .cloned()
-                    .ok_or_else(|| VmError {
-                        message: format!("missing key: {key}"),
-                    })
+                    .ok_or_else(|| self.err(format!("missing key: {key}")))
             }
-            other => Err(VmError {
-                message: format!("cannot index into {other:?}"),
-            }),
+            other => Err(self.err(format!("cannot index into {other:?}"))),
         }
     }
 
@@ -424,35 +391,25 @@ impl Vm {
         match base {
             Value::Array(h) => {
                 let idx = match index {
-                    Value::Int(i) => usize::try_from(i).map_err(|_| VmError {
-                        message: "array index must be >= 0".to_string(),
-                    })?,
+                    Value::Int(i) => {
+                        usize::try_from(i).map_err(|_| self.err("array index must be >= 0"))?
+                    }
                     other => {
-                        return Err(VmError {
-                            message: format!("array index must be int, got {other:?}"),
-                        })
+                        return Err(self.err(format!("array index must be int, got {other:?}")))
                     }
                 };
-                self.heap
-                    .array_set(h, idx, value)
-                    .map_err(|e| VmError { message: e })
+                self.heap.array_set(h, idx, value).map_err(|e| self.err(e))
             }
             Value::Object(h) => {
                 let key = match index {
                     Value::String(s) => s,
                     other => {
-                        return Err(VmError {
-                            message: format!("object key must be string, got {other:?}"),
-                        })
+                        return Err(self.err(format!("object key must be string, got {other:?}")))
                     }
                 };
-                self.heap
-                    .object_set(h, key, value)
-                    .map_err(|e| VmError { message: e })
+                self.heap.object_set(h, key, value).map_err(|e| self.err(e))
             }
-            other => Err(VmError {
-                message: format!("cannot assign through index on {other:?}"),
-            }),
+            other => Err(self.err(format!("cannot assign through index on {other:?}"))),
         }
     }
 

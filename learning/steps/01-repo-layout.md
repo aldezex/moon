@@ -16,7 +16,7 @@ Por eso, desde temprano, separamos por capas.
 - `Cargo.toml` (raiz)
   - Define el **workspace** y el binario `moon` (CLI).
 - `src/main.rs`
-  - CLI: `moon run`, `moon ast`, `moon check`, `moon vm`.
+  - CLI: `moon run`, `moon ast`, `moon check`, `moon vm`, `moon disasm`.
 
 Crates (carpeta `compiler/`):
 
@@ -80,6 +80,8 @@ Archivo clave:
   - `cargo run -- ast examples/hello.moon`
 - Solo typecheck:
   - `cargo run -- check examples/hello.moon`
+- Disassembler (bytecode):
+  - `cargo run -- disasm examples/hello.moon`
 - Tests:
   - `cargo test --workspace`
 - Language server (LSP):

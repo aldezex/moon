@@ -1,4 +1,4 @@
-# 07 - CLI (moon run / moon ast / moon check / moon vm)
+# 07 - CLI (moon run / moon ast / moon check / moon vm / moon disasm)
 
 ## Objetivo
 
@@ -57,6 +57,21 @@ Pipeline:
 Nota:
 - En esta etapa el "compile error" es raro (la mayoria de cosas ya deberian estar validadas por typecheck/parser).
 
+### `moon disasm <file>` (bytecode disassembler)
+
+Pipeline:
+- load -> lex -> parse -> typecheck -> compile(bytecode) -> print
+
+Imprime el bytecode por funcion:
+- `ip` (instruction pointer)
+- instruccion (kind)
+- span + line/col aproximado en el source
+
+Sirve para:
+- entender que genera el compilador
+- debuggear bugs de VM/bytecode
+- validar que dos expresiones distintas generan bytecode distinto (precedencias, scopes, etc)
+
 ## Input: file vs stdin
 
 Convencion:
@@ -77,10 +92,10 @@ Tipos de error:
 - type error: `TypeError` (span del nodo)
 - runtime error (interpreter): `RuntimeError` (span del nodo)
 - compile error (bytecode): `CompileError` (span del nodo)
-- vm error: (por ahora solo message; a futuro tambien span)
+- vm error: `VmError` (message + span por instruccion)
 
 ## Mini ejercicios
 
 1) Agrega `moon tokens <file>` que imprima la lista de tokens (kind + span).
 2) Agrega `moon fmt <file>` (aunque sea un stub) para reservar el comando.
-3) En `moon vm`, agrega un flag para imprimir el bytecode antes de ejecutar.
+3) Mejora `moon disasm` para que tambien imprima el texto de la linea (usa `Source::render_span`).

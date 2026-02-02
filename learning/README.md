@@ -39,7 +39,7 @@ Requisitos:
 6) Interpreter (tree-walk)
    - `learning/steps/06-interpreter.md`
 
-7) CLI (moon run / moon ast / moon check / moon vm)
+7) CLI (moon run / moon ast / moon check / moon vm / moon disasm)
    - `learning/steps/07-cli.md`
 
 8) Tests y ejemplos
@@ -82,5 +82,6 @@ Ejecutar:
 - `cargo run -- run examples/hello.moon`
 - `cargo run -- check examples/hello.moon`
 - `cargo run -- vm examples/hello.moon`
+- `cargo run -- disasm examples/hello.moon`
 - `cargo run -p moon_lsp --bin moon-lsp`
 - `cargo test --workspace`

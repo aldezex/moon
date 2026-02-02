@@ -59,12 +59,20 @@ Esta VM es deliberadamente simple:
 
 Esto no es la VM mas rapida posible, pero es excelente para aprender y para validar semantica.
 
-## Instrucciones (Instr)
+## Instrucciones (Instr) + debug info (Span)
 
 Archivo:
 - `compiler/bytecode/src/instr.rs`
 
-Categorias:
+En Moon, una instruccion de bytecode no es solo "que hacer", tambien incluye **de donde viene** en el source.
+
+Por eso `Instr` es una struct:
+- `kind: InstrKind` (la instruccion en si)
+- `span: Span` (rango en bytes en el source que genero esa instruccion)
+
+`InstrKind` es el enum con la lista de instrucciones.
+
+Categorias (InstrKind):
 
 1) Stack
 - `Push(Value)`
@@ -192,6 +200,24 @@ La VM intercepta calls a una Function cuyo `name == "gc"`:
 - corre `heap.collect_garbage(roots)`
 - empuja `Unit` como retorno
 
+## Disassembler: `moon disasm`
+
+Ahora que el bytecode incluye `span` por instruccion, podemos imprimir el modulo y ver "que genero" el compiler.
+
+Comando:
+- `moon disasm <file>`
+
+Pipeline:
+- load -> lex -> parse -> typecheck -> compile(bytecode) -> print
+
+El output muestra por funcion:
+- `ip` (instruction pointer)
+- `InstrKind` (la instruccion)
+- `@line:col [start..end]` (origen aproximado en el source)
+
+Archivo:
+- `src/main.rs` (cmd `disasm`)
+
 ## Tests: VM vs interpreter
 
 Archivo:
@@ -206,6 +232,6 @@ Un buen criterio a futuro:
 
 ## Mini ejercicios
 
-1) Agrega `moon disasm <file>` para imprimir bytecode (Module + functions).
-2) Agrega spans por instruccion para que `VmError` pueda mostrar `Source::render_span`.
+1) Mejora `moon disasm` para imprimir un snippet por instruccion usando `Source::render_span`.
+2) Agrega "stacktrace" basico en `VmError` (lista de funciones activas).
 3) Cambia variables de HashMap a slots (indices) para performance.

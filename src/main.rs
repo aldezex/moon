@@ -66,6 +66,19 @@ fn main() {
                 std::process::exit(code);
             }
         }
+        Some("disasm") => {
+            let path = match args.next() {
+                Some(p) => p,
+                None => {
+                    eprintln!("missing <file> for `moon disasm`.\n");
+                    print_help();
+                    std::process::exit(2);
+                }
+            };
+            if let Err(code) = cmd_disasm(path) {
+                std::process::exit(code);
+            }
+        }
         Some("help") | Some("-h") | Some("--help") | None => {
             print_help();
         }
@@ -221,12 +234,75 @@ fn cmd_vm(path: String) -> Result<(), i32> {
     })?;
 
     let value = run_vm(module).map_err(|e| {
-        eprintln!("vm error: {}", e.message);
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("vm error: {}", e.message))
+        );
         1
     })?;
 
     if value != Value::Unit {
         println!("{value}");
+    }
+
+    Ok(())
+}
+
+fn cmd_disasm(path: String) -> Result<(), i32> {
+    let source = load_source(&path).map_err(|e| {
+        eprintln!("io error: {e}");
+        1
+    })?;
+
+    let tokens = lex(&source.text).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("lex error: {}", e.message))
+        );
+        1
+    })?;
+
+    let program = parse(tokens).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("parse error: {}", e.message))
+        );
+        1
+    })?;
+
+    let _ = check_program(&program).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("type error: {}", e.message))
+        );
+        1
+    })?;
+
+    let module = compile(&program).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("compile error: {}", e.message))
+        );
+        1
+    })?;
+
+    println!("main: f{}", module.main);
+    for (id, func) in module.functions.iter().enumerate() {
+        let params = if func.params.is_empty() {
+            String::new()
+        } else {
+            func.params.join(", ")
+        };
+        println!("\nfn f{id} {}({})", func.name, params);
+        for (ip, instr) in func.code.iter().enumerate() {
+            let start = instr.span.start.min(source.text.len());
+            let end = instr.span.end.min(source.text.len());
+            let (line, col) = source.line_col(start);
+            println!(
+                "  {:04}  {:<24}  @{}:{}  [{}..{}]",
+                ip, instr.kind, line, col, start, end
+            );
+        }
     }
 
     Ok(())
@@ -252,6 +328,7 @@ USAGE:
   moon ast <file>
   moon check <file>
   moon vm <file>
+  moon disasm <file>
 
 NOTES:
   - Use '-' as <file> to read from stdin.

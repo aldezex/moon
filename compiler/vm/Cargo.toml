@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 moon_bytecode = { path = "../bytecode" }
+moon_core = { path = "../core" }
 moon_runtime = { path = "../runtime" }
 
 [dev-dependencies]
-moon_core = { path = "../core" }
 moon_typechecker = { path = "../typechecker" }

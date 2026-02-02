@@ -120,23 +120,33 @@ mantienes un map dinamico tipado, y sumas records tipados cuando queres estructu
 
 ## 4) Errores mejorados: spans en VM/bytecode + disassembler
 
-Hoy el frontend (lexer/parser/typechecker) tiene spans muy buenos.
-En VM todavia estamos "a medias": hay errores, pero no siempre muestran un span exacto.
+Estado: implementado (MVP).
 
-Dos mejoras que cambian mucho la experiencia:
+Lo que agregamos:
 
 1) Debug info: Span por instruccion
-- En `compiler/bytecode`, cada `Instr` puede llevar un `Span` (o se mantiene un side-table paralelo).
+- En `compiler/bytecode`, `Instr` es `Instr { kind, span }`.
 - El compiler asigna el span del nodo AST que genero esa instruccion.
-- La VM, al fallar, puede imprimir `source.render_span(span, "...")`.
 
-2) `moon disasm <file>`
-- Comando de CLI que imprime:
-  - lista de funciones
-  - instrucciones por funcion con indices (ip)
-- Sirve para aprender, debuggear y validar el compiler.
+Archivos:
+- `compiler/bytecode/src/instr.rs`
+- `compiler/bytecode/src/compiler.rs`
 
-Ver ejercicios ya sugeridos en:
+2) Errores de VM con ubicacion
+- `VmError` ahora incluye `span`.
+- La VM mantiene `current_span` (span de la instruccion actual) y lo pega a los errores.
+
+Archivos:
+- `compiler/vm/src/error.rs`
+- `compiler/vm/src/vm.rs`
+
+3) `moon disasm <file>`
+- Comando de CLI que imprime funciones + bytecode con `ip` y spans.
+
+Archivos:
+- `src/main.rs` (cmd `disasm`)
+
+Ver mas detalle en:
 - `learning/steps/11-bytecode-and-vm.md`
 
 ## 5) Performance en VM: variables por slots (y menos HashMap)
@@ -196,9 +206,14 @@ Ideas practicas:
 ## 9) Que feature hacemos ahora (sugerencia)
 
 Si tenemos que elegir un siguiente paso "con mejor ROI":
-1) spans en VM/bytecode + `moon disasm`
-2) `return` (muy util, poco trabajo si se hace bien)
-3) funciones como valores (sin captures) y luego closures
+
+Ya completamos:
+- spans en VM/bytecode + `moon disasm`
+
+Siguiente trio con mejor impacto:
+1) `return` (muy util, poco trabajo si se hace bien)
+2) funciones como valores (sin captures) y luego closures
+3) performance: variables por slots (cuando empiece a doler)
 
 Cada uno de esos pasos mejora:
 - usabilidad del lenguaje
