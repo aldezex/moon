@@ -16,6 +16,9 @@ Codigo:
 
 Requisitos: Rust (cargo).
 
+Guia paso a paso:
+- `learning/README.md`
+
 Comandos:
 - `cargo run -- run examples/hello.moon`
 - `cargo test --workspace`
