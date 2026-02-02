@@ -14,15 +14,25 @@ Archivo:
 ## Gramatica (aproximada) del MVP
 
 ```
-Program  := Stmt* EOF
-Stmt     := "let" Ident "=" Expr ";"?
-          | Expr ";"?
+Program  := Stmt* TailExpr? EOF
+Stmt     := LetStmt | FnStmt | ExprStmt
+LetStmt  := "let" Ident (":" Type)? "=" Expr ";"
+FnStmt   := "fn" Ident "(" Params? ")" "->" Type Block
+ExprStmt := Expr ";"
+TailExpr := Expr            // solo si viene antes de EOF (o antes de '}' dentro de un Block)
 Expr     := (Pratt parser con precedencias)
 Primary  := Int | True | False | String | Ident | "(" Expr ")"
 Unary    := ("-" | "!") Expr
+Postfix  := Call
+Call     := Primary "(" Args? ")"
+Block    := "{" Stmt* TailExpr? "}"
+IfExpr   := "if" Expr Block "else" (Block | IfExpr)
+Type     := Ident
 ```
 
-Nota: por simplicidad, el `;` es obligatorio salvo que estemos justo antes de `EOF`.
+Regla clave:
+- Un `ExprStmt` siempre termina en `;` y su valor se descarta.
+- La ultima expresion sin `;` en un `Program` o `Block` es la **tail expression** y define el valor de esa unidad.
 
 ## Por que Pratt parser
 
@@ -48,6 +58,8 @@ En `peek_infix()` definimos (de menor a mayor):
 
 Los unarios (`-expr`, `!expr`) tienen precedencia mas alta (se parsean con `parse_expr(7)`).
 
+Los calls (`f(x)`) se parsean como postfix con precedencia aun mas alta que los binarios.
+
 ## Asociatividad (detalle importante)
 
 Este Pratt parser construye operadores binarios como **left-associative** usando:
@@ -64,6 +76,9 @@ Ejemplos:
 - despues de `let` no hay identificador
 - falta `=`
 - falta `)`
+- falta `}`
 - falta `;`
+- falta `else`
+- `fn` fuera de top-level (restriccion actual)
 
 De nuevo: la CLI los imprime con `Source::render_span(...)`.

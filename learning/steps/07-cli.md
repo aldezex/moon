@@ -21,13 +21,15 @@ Pipeline:
    - `moon_core::lexer::lex(&source.text)`
 3) Parser:
    - `moon_core::parser::parse(tokens)`
-4) Interpreter:
+4) Typecheck (estricto):
+   - `moon_typechecker::check_program(&program)`
+5) Interpreter:
    - `moon_interpreter::eval_program(&program)`
-5) Output:
+6) Output:
    - si el valor final no es `Unit`, se imprime
 
 Errores:
-- lex/parse/runtime se imprimen usando `source.render_span(span, message)`
+- lex/parse/type/runtime se imprimen usando `source.render_span(span, message)`
 
 ### `moon ast <file>`
 
@@ -36,9 +38,23 @@ Hace el mismo pipeline hasta parsear y luego imprime:
 
 Esto es util para validar que el parser arma el AST que esperamos.
 
+### `moon check <file>`
+
+Corre solo:
+- lex -> parse -> typecheck
+
+Y si todo esta bien imprime:
+- `ok: <Type>` (el tipo del programa)
+
 ## Por que la CLI no vive dentro de compiler/
 
 Porque `moon` es "la herramienta" (entrypoint), y `compiler/*` son librerias reutilizables:
 - tests
 - embedding (a futuro)
 - herramientas (formatter, lsp, etc.)
+
+## Nota sobre ';' y el valor del programa
+
+Regla estilo Rust:
+- `expr;` descarta el valor (statement)
+- la ultima expresion **sin** `;` es el resultado del programa/bloque

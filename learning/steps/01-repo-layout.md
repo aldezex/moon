@@ -9,11 +9,13 @@ Queremos que el repo sea facil de navegar y que cada crate tenga una responsabil
 - `Cargo.toml` (raiz)
   - Define el **workspace** y el binario `moon` (CLI).
 - `src/main.rs`
-  - CLI: `moon run`, `moon ast`.
+  - CLI: `moon run`, `moon ast`, `moon check`.
 - `compiler/core`
   - `moon_core`: frontend (AST, lexer, parser, spans/diagnosticos).
 - `compiler/interpreter`
   - `moon_interpreter`: interprete (runtime MVP + evaluador).
+- `compiler/typechecker`
+  - `moon_typechecker`: typechecker estricto (sin ejecutar).
 - `examples/`
   - Scripts `.moon` para probar.
 
@@ -24,7 +26,8 @@ Rust workspaces nos dejan:
 - Evitar dependencias circulares.
 - Mantener bien definida la direccion de dependencias:
   - `moon_interpreter` depende de `moon_core` (necesita AST).
-  - `moon` (CLI) depende de ambos.
+  - `moon_typechecker` depende de `moon_core` (necesita AST).
+  - `moon` (CLI) depende de los tres.
 
 Archivo clave:
 - `Cargo.toml` (raiz)

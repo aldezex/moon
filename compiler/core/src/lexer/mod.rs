@@ -9,12 +9,16 @@ pub enum TokenKind {
 
     // Keywords
     Let,
+    Fn,
+    If,
+    Else,
     True,
     False,
 
     // Operators / punctuation
     Plus,
     Minus,
+    Arrow,
     Star,
     Slash,
     Percent,
@@ -31,6 +35,10 @@ pub enum TokenKind {
 
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    Comma,
+    Colon,
     Semicolon,
 
     Eof,
@@ -75,6 +83,9 @@ pub fn lex(input: &str) -> Result<Vec<Token>, LexError> {
             let text = &input[start..i];
             let kind = match text {
                 "let" => TokenKind::Let,
+                "fn" => TokenKind::Fn,
+                "if" => TokenKind::If,
+                "else" => TokenKind::Else,
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
                 _ => TokenKind::Ident(text.to_string()),
@@ -177,11 +188,21 @@ pub fn lex(input: &str) -> Result<Vec<Token>, LexError> {
         let start = i;
         let (kind, len) = match b {
             b'+' => (TokenKind::Plus, 1),
-            b'-' => (TokenKind::Minus, 1),
+            b'-' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
+                    (TokenKind::Arrow, 2)
+                } else {
+                    (TokenKind::Minus, 1)
+                }
+            }
             b'*' => (TokenKind::Star, 1),
             b'%' => (TokenKind::Percent, 1),
             b'(' => (TokenKind::LParen, 1),
             b')' => (TokenKind::RParen, 1),
+            b'{' => (TokenKind::LBrace, 1),
+            b'}' => (TokenKind::RBrace, 1),
+            b',' => (TokenKind::Comma, 1),
+            b':' => (TokenKind::Colon, 1),
             b';' => (TokenKind::Semicolon, 1),
             b'!' => {
                 if i + 1 < bytes.len() && bytes[i + 1] == b'=' {

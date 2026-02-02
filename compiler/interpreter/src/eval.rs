@@ -1,27 +1,51 @@
 use moon_core::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 use moon_core::span::Span;
 
+use crate::env::Function;
 use crate::{Env, RuntimeError, Value};
 
 pub fn eval_program(program: &Program) -> Result<Value, RuntimeError> {
     let mut env = Env::new();
-    let mut last = Value::Unit;
 
+    // Pre-pass: register functions so they can be called before their definition (Rust-style items).
     for stmt in &program.stmts {
-        last = eval_stmt(stmt, &mut env)?;
+        if let Stmt::Fn {
+            name, params, body, ..
+        } = stmt
+        {
+            env.define_fn(
+                name.clone(),
+                Function {
+                    params: params.iter().map(|p| p.name.clone()).collect(),
+                    body: body.clone(),
+                },
+            );
+        }
     }
 
-    Ok(last)
+    for stmt in &program.stmts {
+        eval_stmt(stmt, &mut env)?;
+    }
+
+    match &program.tail {
+        Some(expr) => eval_expr(expr, &mut env),
+        None => Ok(Value::Unit),
+    }
 }
 
-fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Value, RuntimeError> {
+fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<(), RuntimeError> {
     match stmt {
         Stmt::Let { name, expr, .. } => {
             let value = eval_expr(expr, env)?;
-            env.set(name.clone(), value);
-            Ok(Value::Unit)
+            env.define_var(name.clone(), value);
+            Ok(())
         }
-        Stmt::Expr { expr, .. } => eval_expr(expr, env),
+        Stmt::Fn { .. } => Ok(()),
+        Stmt::Expr { expr, .. } => {
+            // Expression statement always discards its value.
+            let _ = eval_expr(expr, env)?;
+            Ok(())
+        }
     }
 }
 
@@ -30,11 +54,90 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
         Expr::Int(i, _) => Ok(Value::Int(*i)),
         Expr::Bool(b, _) => Ok(Value::Bool(*b)),
         Expr::String(s, _) => Ok(Value::String(s.clone())),
-        Expr::Ident(name, sp) => env.get(name).cloned().ok_or_else(|| RuntimeError {
+        Expr::Ident(name, sp) => env.get_var(name).cloned().ok_or_else(|| RuntimeError {
             message: format!("undefined variable: {name}"),
             span: *sp,
         }),
         Expr::Group { expr, .. } => eval_expr(expr, env),
+        Expr::Block { stmts, tail, .. } => {
+            env.push_scope();
+            let result = (|| {
+                for stmt in stmts {
+                    eval_stmt(stmt, env)?;
+                }
+                match tail {
+                    Some(expr) => eval_expr(expr, env),
+                    None => Ok(Value::Unit),
+                }
+            })();
+            env.pop_scope();
+            result
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            span,
+        } => {
+            let v = eval_expr(cond, env)?;
+            let b = match v {
+                Value::Bool(b) => b,
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("if condition must be bool, got {other:?}"),
+                        span: *span,
+                    })
+                }
+            };
+            if b {
+                eval_expr(then_branch, env)
+            } else {
+                eval_expr(else_branch, env)
+            }
+        }
+        Expr::Call { callee, args, span } => {
+            let name = match &**callee {
+                Expr::Ident(name, _) => name.as_str(),
+                _ => {
+                    return Err(RuntimeError {
+                        message: "cannot call non-function value".to_string(),
+                        span: *span,
+                    })
+                }
+            };
+
+            let func = env.get_fn(name).cloned().ok_or_else(|| RuntimeError {
+                message: format!("undefined function: {name}"),
+                span: *span,
+            })?;
+
+            if func.params.len() != args.len() {
+                return Err(RuntimeError {
+                    message: format!(
+                        "wrong number of arguments for {name}: expected {}, got {}",
+                        func.params.len(),
+                        args.len()
+                    ),
+                    span: *span,
+                });
+            }
+
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(eval_expr(arg, env)?);
+            }
+
+            // New call frame: only globals + function locals. Caller locals are not visible.
+            let saved_scopes = env.take_scopes();
+            env.push_scope();
+            for (param, value) in func.params.iter().zip(values) {
+                env.define_var(param.clone(), value);
+            }
+
+            let result = eval_expr(&func.body, env);
+            env.restore_scopes(saved_scopes);
+            result
+        }
         Expr::Unary { op, expr, span } => {
             let v = eval_expr(expr, env)?;
             match (op, v) {

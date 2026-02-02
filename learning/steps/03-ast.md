@@ -14,17 +14,31 @@ Archivo:
 
 ### Program
 
-`Program` es simplemente:
-- `stmts: Vec<Stmt>`
+`Program` representa un archivo/script completo como una secuencia de statements + una posible expresion final (tail expression):
+- `stmts: Vec<Stmt>` (siempre "statements" reales)
+- `tail: Option<Expr>` (la ultima expresion **sin** `;`, si existe)
+
+Regla clave:
+- El valor del programa es `tail` si existe, o `Unit` si no.
 
 ### Stmt (statements)
 
 Por ahora:
-- `Let { name, expr, span }`
-- `Expr { expr, span }` (una expresion como statement)
+- `Let { name, ty, expr, span }`
+  - `ty` es una anotacion opcional (`let x: Int = 1;`), util para el typechecker.
+- `Fn { name, params, ret_ty, body, span }`
+  - Declaracion de funcion (solo top-level por ahora).
+- `Expr { expr, span }`
+  - Expression statement (siempre termina en `;` y **descarta** el valor).
 
 Nota:
 - Ambos guardan `span`, y tenemos `Stmt::span()` para recuperarlo.
+
+### TypeExpr y Param
+
+Para tipado estricto, el AST tambien modela anotaciones de tipo:
+- `TypeExpr::Named(String, Span)` (ej: `Int`, `Bool`, `String`)
+- `Param { name, ty, span }` (parametros de funciones)
 
 ### Expr (expressions)
 
@@ -35,10 +49,19 @@ Soportamos:
   - `String(String, Span)`
 - Identificadores:
   - `Ident(String, Span)`
+- Bloques:
+  - `Block { stmts, tail, span }`
+  - Un bloque introduce un scope nuevo y devuelve:
+    - `tail` si existe (ultima expresion sin `;`)
+    - `Unit` si no
+- If/else:
+  - `If { cond, then_branch, else_branch, span }`
 - Unarios:
   - `Unary { op, expr, span }` con `UnaryOp::{Neg, Not}`
 - Binarios:
   - `Binary { lhs, op, rhs, span }` con `BinaryOp` para `+ - * / ...`
+- Llamadas:
+  - `Call { callee, args, span }` (por ahora llamamos funciones por nombre)
 - Agrupacion:
   - `Group { expr, span }` (parentesis)
 

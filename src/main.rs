@@ -5,6 +5,7 @@ use moon_core::lexer::lex;
 use moon_core::parser::parse;
 use moon_core::source::Source;
 use moon_interpreter::{eval_program, Value};
+use moon_typechecker::check_program;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -37,6 +38,19 @@ fn main() {
                 std::process::exit(code);
             }
         }
+        Some("check") => {
+            let path = match args.next() {
+                Some(p) => p,
+                None => {
+                    eprintln!("missing <file> for `moon check`.\n");
+                    print_help();
+                    std::process::exit(2);
+                }
+            };
+            if let Err(code) = cmd_check(path) {
+                std::process::exit(code);
+            }
+        }
         Some("help") | Some("-h") | Some("--help") | None => {
             print_help();
         }
@@ -63,6 +77,14 @@ fn cmd_run(path: String) -> Result<(), i32> {
         eprintln!(
             "{}",
             source.render_span(e.span, &format!("parse error: {}", e.message))
+        );
+        1
+    })?;
+
+    let _ = check_program(&program).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("type error: {}", e.message))
         );
         1
     })?;
@@ -105,6 +127,37 @@ fn cmd_ast(path: String) -> Result<(), i32> {
     Ok(())
 }
 
+fn cmd_check(path: String) -> Result<(), i32> {
+    let source = load_source(&path).map_err(|e| {
+        eprintln!("io error: {e}");
+        1
+    })?;
+
+    let tokens = lex(&source.text).map_err(|e| {
+        eprintln!("{}", source.render_span(e.span, &format!("lex error: {}", e.message)));
+        1
+    })?;
+
+    let program = parse(tokens).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("parse error: {}", e.message))
+        );
+        1
+    })?;
+
+    let ty = check_program(&program).map_err(|e| {
+        eprintln!(
+            "{}",
+            source.render_span(e.span, &format!("type error: {}", e.message))
+        );
+        1
+    })?;
+
+    println!("ok: {ty}");
+    Ok(())
+}
+
 fn load_source(path: &str) -> std::io::Result<Source> {
     if path == "-" {
         use std::io::Read;
@@ -118,14 +171,16 @@ fn load_source(path: &str) -> std::io::Result<Source> {
 
 fn print_help() {
     println!(
-        "moon (MVP)
+        "moon (prototype)
 
 USAGE:
   moon run <file>
   moon ast <file>
+  moon check <file>
 
 NOTES:
   - Use '-' as <file> to read from stdin.
-  - This is an early prototype: ints/bools/strings, let, and expressions."
+  - Semicolons discard values; the last expression without ';' is the program result.
+  - Current features: let, blocks, if/else, fn/calls, ints/bools/strings, and expressions."
     );
 }

@@ -27,23 +27,36 @@ La idea es que puedas leer estos capitulos en orden y, en cada paso, abrir el co
 6) Interpreter (tree-walk)
    - `learning/steps/06-interpreter.md`
 
-7) CLI (moon run / moon ast)
+7) CLI (moon run / moon ast / moon check)
    - `learning/steps/07-cli.md`
 
 8) Tests y ejemplos
    - `learning/steps/08-tests-and-examples.md`
 
-9) Proximos pasos (typechecker estricto, GC, VM)
-   - `learning/steps/09-next-steps.md`
+9) Typechecker estricto (moon check)
+   - `learning/steps/09-typechecker.md`
+
+10) Runtime y memoria (GC) (diseño)
+   - `learning/steps/10-runtime-and-gc.md`
+
+11) Bytecode + VM (diseño)
+   - `learning/steps/11-bytecode-and-vm.md`
+
+12) Proximos pasos (roadmap vivo)
+   - `learning/steps/12-next-steps.md`
 
 ## Estado actual del lenguaje (MVP)
 
 Soportamos:
-- `let name = expr;`
-- Literales: `int`, `bool`, `string`
-- Expresiones: `+ - * / %`, comparaciones, `== !=`, `&& ||`, `!`, `-expr`, y parentesis `(...)`
+- `let name = expr;` (con anotacion opcional: `let x: Int = 1;`)
+- Bloques `{ ... }` con scopes y **tail expression** (la ultima expresion sin `;` es el valor del bloque)
+- `if cond { ... } else { ... }` como expresion
+- `fn name(params...) -> Type { ... }` + llamadas `name(args...)`
+- Literales: `Int`, `Bool`, `String`
+- Expresiones: `+ - * / %`, comparaciones, `== !=`, `&& ||`, `!`, `-expr`, parentesis `(...)`
 - Comentarios de linea `// ...`
 
 Ejecutar:
 - `cargo run -- run examples/hello.moon`
+- `cargo run -- check examples/hello.moon`
 - `cargo test --workspace`

@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Param, Program, Stmt, TypeExpr, UnaryOp};
 use crate::error::ParseError;
 use crate::lexer::{Token, TokenKind};
 
@@ -7,25 +7,20 @@ pub struct Parser {
     pos: usize,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum Terminator {
+    Eof,
+    RBrace,
+}
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, pos: 0 }
     }
 
     pub fn parse_program(mut self) -> Result<Program, ParseError> {
-        let mut stmts = Vec::new();
-        while !self.is_eof() {
-            let stmt = self.parse_stmt()?;
-            stmts.push(stmt);
-        }
-        Ok(Program::new(stmts))
-    }
-
-    fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
-        match &self.peek().kind {
-            TokenKind::Let => self.parse_let_stmt(),
-            _ => self.parse_expr_stmt(),
-        }
+        let (stmts, tail) = self.parse_sequence(Terminator::Eof)?;
+        Ok(Program::new(stmts, tail))
     }
 
     fn parse_let_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -42,38 +37,95 @@ impl Parser {
             }
         };
 
+        let ty = if self.maybe(|k| matches!(k, TokenKind::Colon)).is_some() {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
         self.expect(|k| matches!(k, TokenKind::Equal), "expected '=' after identifier")?;
         let expr = self.parse_expr(0)?;
 
-        let semi = self.maybe(|k| matches!(k, TokenKind::Semicolon));
-        if semi.is_none() && !self.is_eof() {
-            return Err(ParseError {
-                message: "expected ';' after let statement".to_string(),
-                span: expr.span(),
-            });
-        }
+        self.expect(
+            |k| matches!(k, TokenKind::Semicolon),
+            "expected ';' after let statement",
+        )?;
 
         let span = let_tok.span.merge(expr.span());
-        Ok(Stmt::Let { name, expr, span })
+        Ok(Stmt::Let {
+            name,
+            ty,
+            expr,
+            span,
+        })
     }
 
-    fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let expr = self.parse_expr(0)?;
-        let semi = self.maybe(|k| matches!(k, TokenKind::Semicolon));
-        if semi.is_none() && !self.is_eof() {
-            return Err(ParseError {
-                message: "expected ';' after expression".to_string(),
-                span: expr.span(),
-            });
+    fn parse_fn_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let fn_tok = self.expect(|k| matches!(k, TokenKind::Fn), "expected 'fn'")?;
+
+        let name_tok = self.next();
+        let name = match name_tok.kind {
+            TokenKind::Ident(s) => s,
+            _ => {
+                return Err(ParseError {
+                    message: "expected identifier after 'fn'".to_string(),
+                    span: name_tok.span,
+                })
+            }
+        };
+
+        self.expect(|k| matches!(k, TokenKind::LParen), "expected '(' after fn name")?;
+        let mut params = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RParen) {
+            loop {
+                let param_name_tok = self.next();
+                let param_name = match param_name_tok.kind {
+                    TokenKind::Ident(s) => s,
+                    _ => {
+                        return Err(ParseError {
+                            message: "expected parameter name".to_string(),
+                            span: param_name_tok.span,
+                        })
+                    }
+                };
+
+                self.expect(|k| matches!(k, TokenKind::Colon), "expected ':' after parameter name")?;
+                let ty = self.parse_type()?;
+                let span = param_name_tok.span.merge(ty.span());
+                params.push(Param {
+                    name: param_name,
+                    ty,
+                    span,
+                });
+
+                if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                    if matches!(self.peek().kind, TokenKind::RParen) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
         }
-        Ok(Stmt::Expr {
-            span: expr.span(),
-            expr,
+        self.expect(|k| matches!(k, TokenKind::RParen), "expected ')' after parameters")?;
+
+        self.expect(|k| matches!(k, TokenKind::Arrow), "expected '->' after parameters")?;
+        let ret_ty = self.parse_type()?;
+
+        let body = self.parse_block_expr()?;
+        let span = fn_tok.span.merge(body.span());
+        Ok(Stmt::Fn {
+            name,
+            params,
+            ret_ty,
+            body,
+            span,
         })
     }
 
     fn parse_expr(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.parse_prefix()?;
+        lhs = self.parse_postfix(lhs)?;
 
         loop {
             let (op, prec) = match self.peek_infix() {
@@ -107,6 +159,8 @@ impl Parser {
             TokenKind::False => Ok(Expr::Bool(false, tok.span)),
             TokenKind::String(s) => Ok(Expr::String(s, tok.span)),
             TokenKind::Ident(s) => Ok(Expr::Ident(s, tok.span)),
+            TokenKind::If => self.parse_if_expr(tok),
+            TokenKind::LBrace => self.parse_block_expr_from_open(tok),
             TokenKind::Minus => {
                 let expr = self.parse_expr(7)?;
                 Ok(Expr::Unary {
@@ -133,6 +187,152 @@ impl Parser {
             }
             _ => Err(ParseError {
                 message: "unexpected token in expression".to_string(),
+                span: tok.span,
+            }),
+        }
+    }
+
+    fn parse_postfix(&mut self, mut expr: Expr) -> Result<Expr, ParseError> {
+        loop {
+            if matches!(self.peek().kind, TokenKind::LParen) {
+                expr = self.parse_call_expr(expr)?;
+                continue;
+            }
+            break;
+        }
+        Ok(expr)
+    }
+
+    fn parse_call_expr(&mut self, callee: Expr) -> Result<Expr, ParseError> {
+        let open = self.expect(|k| matches!(k, TokenKind::LParen), "expected '('")?;
+        let mut args = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RParen) {
+            loop {
+                let arg = self.parse_expr(0)?;
+                args.push(arg);
+
+                if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                    if matches!(self.peek().kind, TokenKind::RParen) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.expect(|k| matches!(k, TokenKind::RParen), "expected ')'")?;
+
+        let span = callee.span().merge(open.span).merge(close.span);
+        Ok(Expr::Call {
+            callee: Box::new(callee),
+            args,
+            span,
+        })
+    }
+
+    fn parse_if_expr(&mut self, if_tok: Token) -> Result<Expr, ParseError> {
+        let cond = self.parse_expr(0)?;
+
+        let then_branch = self.parse_block_expr()?;
+
+        self.expect(|k| matches!(k, TokenKind::Else), "expected 'else'")?;
+
+        let else_branch = match self.peek().kind {
+            TokenKind::If => {
+                // else if ...
+                let tok = self.next();
+                self.parse_if_expr(tok)?
+            }
+            TokenKind::LBrace => self.parse_block_expr()?,
+            _ => {
+                let tok = self.peek().clone();
+                return Err(ParseError {
+                    message: "expected 'if' or '{' after 'else'".to_string(),
+                    span: tok.span,
+                });
+            }
+        };
+
+        let span = if_tok.span.merge(else_branch.span());
+        Ok(Expr::If {
+            cond: Box::new(cond),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+            span,
+        })
+    }
+
+    fn parse_block_expr(&mut self) -> Result<Expr, ParseError> {
+        let open = self.expect(|k| matches!(k, TokenKind::LBrace), "expected '{'")?;
+        self.parse_block_expr_from_open(open)
+    }
+
+    fn parse_block_expr_from_open(&mut self, open: Token) -> Result<Expr, ParseError> {
+        let (stmts, tail) = self.parse_sequence(Terminator::RBrace)?;
+        let close = self.expect(|k| matches!(k, TokenKind::RBrace), "expected '}'")?;
+
+        let span = open.span.merge(close.span);
+        Ok(Expr::Block {
+            stmts,
+            tail: tail.map(Box::new),
+            span,
+        })
+    }
+
+    fn parse_sequence(&mut self, terminator: Terminator) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
+        let mut stmts = Vec::new();
+        let mut tail = None;
+
+        while !self.at_terminator(terminator) {
+            match &self.peek().kind {
+                TokenKind::Let => {
+                    stmts.push(self.parse_let_stmt()?);
+                    continue;
+                }
+                TokenKind::Fn => {
+                    if matches!(terminator, Terminator::RBrace) {
+                        let tok = self.peek().clone();
+                        return Err(ParseError {
+                            message: "function declarations are only allowed at top-level (for now)"
+                                .to_string(),
+                            span: tok.span,
+                        });
+                    }
+                    stmts.push(self.parse_fn_stmt()?);
+                    continue;
+                }
+                _ => {}
+            }
+
+            let expr = self.parse_expr(0)?;
+            if self.maybe(|k| matches!(k, TokenKind::Semicolon)).is_some() {
+                stmts.push(Stmt::Expr {
+                    span: expr.span(),
+                    expr,
+                });
+                continue;
+            }
+
+            if self.at_terminator(terminator) {
+                tail = Some(expr);
+                break;
+            }
+
+            return Err(ParseError {
+                message: "expected ';' after expression".to_string(),
+                span: expr.span(),
+            });
+        }
+
+        Ok((stmts, tail))
+    }
+
+    fn parse_type(&mut self) -> Result<TypeExpr, ParseError> {
+        let tok = self.next();
+        match tok.kind {
+            TokenKind::Ident(name) => Ok(TypeExpr::Named(name, tok.span)),
+            _ => Err(ParseError {
+                message: "expected type name".to_string(),
                 span: tok.span,
             }),
         }
@@ -174,6 +374,13 @@ impl Parser {
 
     fn is_eof(&self) -> bool {
         matches!(self.peek().kind, TokenKind::Eof)
+    }
+
+    fn at_terminator(&self, terminator: Terminator) -> bool {
+        match terminator {
+            Terminator::Eof => self.is_eof(),
+            Terminator::RBrace => matches!(self.peek().kind, TokenKind::RBrace),
+        }
     }
 
     fn maybe(&mut self, pred: impl FnOnce(&TokenKind) -> bool) -> Option<Token> {

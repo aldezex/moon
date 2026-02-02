@@ -32,11 +32,25 @@ Por ahora:
 Archivo:
 - `compiler/interpreter/src/env.rs`
 
-`Env` es un `HashMap<String, Value>`:
-- `get(name)` para leer variables
-- `set(name, value)` para definir/actualizar
+`Env` maneja 3 cosas:
+- variables globales
+- scopes locales (stack) para bloques
+- tabla global de funciones
 
-Nota: no tenemos scopes todavia; es un entorno global plano.
+Variables:
+- `globals: HashMap<String, Value>`
+- `scopes: Vec<HashMap<String, Value>>` (innermost al final)
+
+Funciones:
+- `funcs: HashMap<String, Function>`
+
+Reglas:
+- `let` define en el scope actual (si estamos dentro de un bloque) o en `globals` (si estamos en top-level).
+- lookup de variables busca primero en scopes locales, luego en globales.
+
+Funciones hoy no son valores (todavia):
+- Se declaran con `fn` (solo top-level por ahora)
+- Se llaman por nombre: `f(1, 2)`
 
 ## RuntimeError: errores en ejecucion
 
@@ -66,8 +80,9 @@ Salida:
 ### Flujo principal
 
 - `eval_program(program)`:
-  - recorre `stmts` en orden
-  - guarda el ultimo valor evaluado (como REPL)
+  1) Hace un pre-pass para registrar todas las funciones (`fn`) antes de ejecutar nada (estilo Rust items).
+  2) Ejecuta los statements en orden (lets y expr statements).
+  3) Si existe una tail expression (`program.tail`), ese es el valor final.
 
 ### Statements
 
@@ -75,13 +90,18 @@ Salida:
   - evalua `expr`
   - guarda en `Env`
   - devuelve `Unit`
-- `expr;`
-  - devuelve el resultado de evaluar la expresion
+- `expr;` (expr statement)
+  - evalua la expresion y descarta el valor (devuelve `Unit`)
+- `fn name(...) -> Type { ... }`
+  - se registra en la tabla de funciones (no devuelve valor)
 
 ### Expresiones
 
 Soportamos:
 - literales / ident
+- bloques `{ ... }` con scope y tail expression
+- `if ... else ...` como expresion
+- llamadas `f(x, y)`
 - unarios: `-` para ints, `!` para bools
 - binarios:
   - Aritmetica: `+ - * / %` (ints)
@@ -93,3 +113,14 @@ Soportamos:
 Short-circuit:
 - `a && b`: si `a` es `false`, no evalua `b`
 - `a || b`: si `a` es `true`, no evalua `b`
+
+### Scoping (detalle importante)
+
+Los bloques son scopes lexicos:
+- `{ let x = 2; x }` devuelve `2` y `x` no existe fuera del bloque.
+
+Las funciones **no capturan** variables locales del caller (no hay closures aun):
+- Cuando llamamos una funcion, ejecutamos su cuerpo con:
+  - acceso a `globals`
+  - un scope local nuevo con sus parametros/variables
+  - sin acceso a scopes del caller

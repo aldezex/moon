@@ -22,12 +22,13 @@ Archivo:
   - `String(String)`
   - `Ident(String)`
 - Keywords:
-  - `Let`, `True`, `False`
+  - `Let`, `Fn`, `If`, `Else`, `True`, `False`
 - Operadores/puntuacion:
   - `+ - * / %`
+  - `->` (arrow para tipos de funciones)
   - `! = == != < <= > >=`
   - `&& ||`
-  - `(` `)` `;`
+  - `(` `)` `{` `}` `,` `:` `;`
 - `Eof`
 
 Cada `Token` tiene:
@@ -50,6 +51,7 @@ Cada `Token` tiene:
    - Nota: por ahora forzamos ASCII (MVP).
 6) Operadores y puntuacion:
    - Maneja tokens de 1 y 2 caracteres (ej: `==`, `<=`, `&&`).
+   - Caso especial: `->` se tokeniza como `Arrow` (no como `-` y `>`).
 
 ## Errores del lexer
 

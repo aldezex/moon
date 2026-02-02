@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "moon_core",
  "moon_interpreter",
+ "moon_typechecker",
 ]
 
 [[package]]
@@ -16,6 +17,13 @@ version = "0.1.0"
 
 [[package]]
 name = "moon_interpreter"
+version = "0.1.0"
+dependencies = [
+ "moon_core",
+]
+
+[[package]]
+name = "moon_typechecker"
 version = "0.1.0"
 dependencies = [
  "moon_core",
