@@ -143,7 +143,7 @@ El tipo final es:
 
 Primitivas:
 - literales -> tipos obvios
-- ident -> busca en env
+- ident -> busca variable; si no existe, busca funcion top-level y devuelve un `Type::Function`
 
 Blocks:
 - empuja scope
@@ -181,9 +181,13 @@ Ops:
 - `&&`/`||` requieren Bool (-> Bool)
 
 Calls:
-- por ahora solo por nombre (callee debe ser Ident)
-- debe existir firma
+- el callee es una expresion: debe tener tipo `Type::Function { params, ret }`
 - args deben matchear en tipo y cantidad
+- el tipo del `call` es `ret`
+
+Nota (limitacion MVP): todavia no tenemos sintaxis para anotar tipos de funcion en el source,
+pero el typechecker los puede inferir en casos como:
+`fn add1(x: Int) -> Int { x + 1 } let f = add1; f(41)`
 
 ## Control flow y `Type::Never` (para `return`)
 

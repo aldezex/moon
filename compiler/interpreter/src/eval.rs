@@ -136,13 +136,19 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
         Expr::Bool(b, _) => Ok(Exec::Value(Value::Bool(*b))),
         Expr::String(s, _) => Ok(Exec::Value(Value::String(s.clone()))),
         Expr::Ident(name, sp) => {
-            env.get_var(name)
-                .cloned()
-                .map(Exec::Value)
-                .ok_or_else(|| RuntimeError {
-                    message: format!("undefined variable: {name}"),
-                    span: *sp,
-                })
+            if let Some(v) = env.get_var(name).cloned() {
+                return Ok(Exec::Value(v));
+            }
+
+            // Functions are values too (like Rust function items). Vars shadow functions.
+            if env.get_fn(name).is_some() || name == "gc" {
+                return Ok(Exec::Value(Value::Function(name.clone())));
+            }
+
+            Err(RuntimeError {
+                message: format!("undefined variable: {name}"),
+                span: *sp,
+            })
         }
 
         Expr::Array { elements, .. } => {
@@ -220,14 +226,16 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
         }
 
         Expr::Call { callee, args, span } => {
-            let name = match &**callee {
-                Expr::Ident(name, _) => name.as_str(),
-                _ => {
-                    return Err(RuntimeError {
-                        message: "cannot call non-function value".to_string(),
-                        span: *span,
-                    })
-                }
+            let callee_v = match eval_expr(callee, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
+
+            let Value::Function(name) = callee_v else {
+                return Err(RuntimeError {
+                    message: "cannot call non-function value".to_string(),
+                    span: *span,
+                });
             };
 
             // Builtins (minimal):
@@ -244,7 +252,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
                 return Ok(Exec::Value(Value::Unit));
             }
 
-            let func = env.get_fn(name).cloned().ok_or_else(|| RuntimeError {
+            let func = env.get_fn(&name).cloned().ok_or_else(|| RuntimeError {
                 message: format!("undefined function: {name}"),
                 span: *span,
             })?;

@@ -6,6 +6,7 @@ pub enum Value {
     Bool(bool),
     String(String),
     Unit,
+    Function(String),
 
     // Heap-allocated values (traced by the GC).
     Array(GcRef),
@@ -19,6 +20,7 @@ impl std::fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::String(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
+            Value::Function(name) => write!(f, "<fn {name}>"),
             Value::Array(h) => write!(f, "<array@{}>", h.0),
             Value::Object(h) => write!(f, "<object@{}>", h.0),
         }

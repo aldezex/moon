@@ -265,25 +265,12 @@ fn compile_expr(
         },
 
         Expr::Call { callee, args, span } => {
-            let name = match &**callee {
-                Expr::Ident(name, _) => name.as_str(),
-                _ => {
-                    return Err(CompileError {
-                        message: "can only call functions by name (for now)".to_string(),
-                        span: *span,
-                    })
-                }
-            };
-
+            // Evaluate callee first, then args (left-to-right), then call.
+            compile_expr(callee, code, funcs)?;
             for arg in args {
                 compile_expr(arg, code, funcs)?;
             }
-
-            let id = funcs.get(name).copied().ok_or_else(|| CompileError {
-                message: format!("undefined function: {name}"),
-                span: *span,
-            })?;
-            emit(code, InstrKind::Call(id, args.len()), *span);
+            emit(code, InstrKind::CallValue(args.len()), *span);
         }
     }
 

@@ -67,7 +67,7 @@ Soportamos:
 - Assignment como statement: `name = expr;` y `target[index] = expr;`
 - Bloques `{ ... }` con scopes y **tail expression** (la ultima expresion sin `;` es el valor del bloque)
 - `if cond { ... } else { ... }` como expresion
-- `fn name(params...) -> Type { ... }` + llamadas `name(args...)`
+- `fn name(params...) -> Type { ... }` + llamadas `name(args...)` y llamadas indirectas (`let f = name; f(args...)`)
 - `return expr?;` dentro de funciones (early exit; `return;` devuelve `Unit`)
 - Literales:
   - `Int`, `Bool`, `String`

@@ -43,6 +43,16 @@ fn functions_and_call_before_definition() {
 }
 
 #[test]
+fn functions_are_values_and_can_be_called_indirectly() {
+    let v = run_vm(
+        "fn add1(x: Int) -> Int { x + 1 }
+         let f = add1;
+         f(41)",
+    );
+    assert_eq!(v, moon_runtime::Value::Int(42));
+}
+
+#[test]
 fn arrays_objects_and_assignment() {
     let v = run_vm(
         "let a = [1, 2, 3];

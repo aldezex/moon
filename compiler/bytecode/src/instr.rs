@@ -52,6 +52,7 @@ pub enum InstrKind {
 
     // Calls
     Call(FuncId, usize),
+    CallValue(usize),
     Return,
 
     // Heap / aggregates
@@ -93,6 +94,7 @@ impl std::fmt::Display for InstrKind {
             InstrKind::JumpIfTrue(dst) => write!(f, "JumpIfTrue {dst}"),
 
             InstrKind::Call(id, argc) => write!(f, "Call f{id} argc={argc}"),
+            InstrKind::CallValue(argc) => write!(f, "CallValue argc={argc}"),
             InstrKind::Return => write!(f, "Return"),
 
             InstrKind::MakeArray(n) => write!(f, "MakeArray {n}"),

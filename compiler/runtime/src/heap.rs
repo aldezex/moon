@@ -146,7 +146,11 @@ impl Heap {
     fn mark_value(&mut self, value: &Value) {
         match value {
             Value::Array(h) | Value::Object(h) => self.mark_object(*h),
-            Value::Int(_) | Value::Bool(_) | Value::String(_) | Value::Unit => {}
+            Value::Int(_)
+            | Value::Bool(_)
+            | Value::String(_)
+            | Value::Unit
+            | Value::Function(_) => {}
         }
     }
 

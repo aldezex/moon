@@ -51,7 +51,7 @@ Reglas:
 
 Funciones (MVP):
 - se declaran top-level
-- no son valores (todavia)
+- son valores (puedes hacer `let f = add1; f(41)`)
 - no capturan variables locales (todavia)
 - soportan `return expr?;` para salir temprano
 
@@ -122,7 +122,8 @@ Ops:
   - `&&` y `||` con short-circuit
 
 Calls:
-- solo por nombre (callee debe ser `Ident`)
+- el callee es una expresion (se evalua primero)
+- en runtime, el callee debe producir un `Value::Function(name)`
 - crea un "call frame" logico:
   - guarda scopes del caller
   - crea scope nuevo con params

@@ -292,10 +292,21 @@ fn check_expr<S: TypeSink>(
         Expr::Int(_, _) => Type::Int,
         Expr::Bool(_, _) => Type::Bool,
         Expr::String(_, _) => Type::String,
-        Expr::Ident(name, sp) => env.get_var(name).cloned().ok_or_else(|| TypeError {
-            message: format!("undefined variable: {name}"),
-            span: *sp,
-        })?,
+        Expr::Ident(name, sp) => {
+            if let Some(ty) = env.get_var(name).cloned() {
+                ty
+            } else if let Some(sig) = env.get_fn(name) {
+                Type::Function {
+                    params: sig.params.clone(),
+                    ret: Box::new(sig.ret.clone()),
+                }
+            } else {
+                return Err(TypeError {
+                    message: format!("undefined variable: {name}"),
+                    span: *sp,
+                });
+            }
+        }
 
         Expr::Array { elements, span } => {
             if elements.is_empty() {
@@ -416,42 +427,33 @@ fn check_expr<S: TypeSink>(
         }
 
         Expr::Call { callee, args, span } => {
-            let name = match &**callee {
-                Expr::Ident(name, _) => name.as_str(),
-                _ => {
+            let callee_ty = check_expr(callee, env, sink, current_ret)?;
+            if matches!(callee_ty, Type::Never) {
+                return Ok(Type::Never);
+            }
+
+            let (params, ret) = match callee_ty {
+                Type::Function { params, ret } => (params, ret),
+                other => {
                     return Err(TypeError {
-                        message: "can only call functions by name (for now)".to_string(),
+                        message: format!("cannot call non-function value: {other}"),
                         span: *span,
                     })
                 }
             };
 
-            let sig = env.get_fn(name).cloned().ok_or_else(|| TypeError {
-                message: format!("undefined function: {name}"),
-                span: *span,
-            })?;
-
-            if sig.params.len() != args.len() {
+            if params.len() != args.len() {
                 return Err(TypeError {
                     message: format!(
-                        "wrong number of arguments for {name}: expected {}, got {}",
-                        sig.params.len(),
+                        "wrong number of arguments: expected {}, got {}",
+                        params.len(),
                         args.len()
                     ),
                     span: *span,
                 });
             }
 
-            // Record the callee's function type on the identifier span.
-            sink.record(
-                callee.span(),
-                Type::Function {
-                    params: sig.params.clone(),
-                    ret: Box::new(sig.ret.clone()),
-                },
-            );
-
-            for (arg_expr, param_ty) in args.iter().zip(sig.params.iter()) {
+            for (arg_expr, param_ty) in args.iter().zip(params.iter()) {
                 let arg_ty = check_expr(arg_expr, env, sink, current_ret)?;
                 if matches!(arg_ty, Type::Never) {
                     return Ok(Type::Never);
@@ -466,7 +468,7 @@ fn check_expr<S: TypeSink>(
                 }
             }
 
-            sig.ret.clone()
+            *ret
         }
 
         Expr::Index {

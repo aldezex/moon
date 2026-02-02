@@ -99,6 +99,7 @@ Categorias (InstrKind):
 
 6) Calls
 - `Call(FuncId, argc)`
+- `CallValue(argc)`        // indirect call: callee viene en stack como `Value::Function(...)`
 - `Return`
 
 7) Heap/aggregates

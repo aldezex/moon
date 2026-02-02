@@ -61,6 +61,14 @@ fn can_call_function_before_its_definition() {
 }
 
 #[test]
+fn functions_are_values_and_can_be_called_indirectly() {
+    let v = run("fn add1(x: Int) -> Int { x + 1 }
+         let f = add1;
+         f(41)");
+    assert_eq!(v, Value::Int(42));
+}
+
+#[test]
 fn array_literal_index_and_assignment() {
     let v = run("let a = [1, 2, 3]; a[0] = 10; a[0] + a[1]");
     assert_eq!(v, Value::Int(12));

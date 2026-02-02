@@ -47,6 +47,18 @@ fn can_typecheck_call_before_definition() {
 }
 
 #[test]
+fn allows_functions_as_values_and_indirect_calls() {
+    let ty = check("fn add1(x: Int) -> Int { x + 1 } let f = add1; f(41)").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn rejects_calling_non_function_value() {
+    let err = check("let x = 1; x(2)").unwrap_err();
+    assert!(err.contains("cannot call non-function"));
+}
+
+#[test]
 fn infers_array_types_and_indexing() {
     let ty = check("let a = [1, 2, 3]; a[0]").unwrap();
     assert_eq!(ty, Type::Int);

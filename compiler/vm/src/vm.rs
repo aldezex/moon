@@ -82,10 +82,14 @@ impl Vm {
                 }
 
                 InstrKind::LoadVar(name) => {
-                    let v = self
-                        .get_var(frame_idx, &name)
-                        .ok_or_else(|| self.err(format!("undefined variable: {name}")))?;
-                    self.stack.push(v);
+                    if let Some(v) = self.get_var(frame_idx, &name) {
+                        self.stack.push(v);
+                    } else if self.module.by_name.contains_key(&name) {
+                        // Functions are values too. Vars shadow functions.
+                        self.stack.push(Value::Function(name));
+                    } else {
+                        return Err(self.err(format!("undefined variable: {name}")));
+                    }
                 }
                 InstrKind::DefineVar(name) => {
                     let v = self.pop()?;
@@ -186,6 +190,53 @@ impl Vm {
                         args.push(self.pop()?);
                     }
                     args.reverse();
+
+                    let stack_base = self.stack.len();
+                    self.push_call_frame(id, stack_base, args)?;
+                }
+
+                InstrKind::CallValue(argc) => {
+                    // Pop arguments from the stack.
+                    let mut args = Vec::with_capacity(argc);
+                    for _ in 0..argc {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+
+                    let callee = self.pop()?;
+                    let name = match callee {
+                        Value::Function(name) => name,
+                        other => {
+                            return Err(
+                                self.err(format!("cannot call non-function value: {other:?}"))
+                            )
+                        }
+                    };
+
+                    let id = self
+                        .module
+                        .by_name
+                        .get(&name)
+                        .copied()
+                        .ok_or_else(|| self.err(format!("undefined function: {name}")))?;
+
+                    let func_obj = self
+                        .module
+                        .get_func(id)
+                        .ok_or_else(|| self.err("invalid function id"))?;
+
+                    // Builtins are treated like normal functions in bytecode, but executed by the VM.
+                    if func_obj.name == "gc" {
+                        // No args.
+                        if argc != 0 {
+                            return Err(self.err("gc() takes no arguments"));
+                        }
+
+                        let roots = self.roots();
+                        let _ = self.heap.collect_garbage(&roots);
+                        self.stack.push(Value::Unit);
+                        continue;
+                    }
 
                     let stack_base = self.stack.len();
                     self.push_call_frame(id, stack_base, args)?;

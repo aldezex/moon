@@ -111,7 +111,8 @@ Operadores:
 Calls + indexing:
 - `Call { callee, args, span }`
   - `f(1, 2)`
-  - por ahora, el callee se restringe a un nombre (lo valida el typechecker)
+  - el callee es una expresion (por ejemplo, puedes hacer `let g = f; g(1, 2)`)
+  - el typechecker valida que el callee tenga tipo de funcion `(...) -> ...`
 - `Index { target, index, span }`
   - `arr[0]`
   - `obj["k"]`

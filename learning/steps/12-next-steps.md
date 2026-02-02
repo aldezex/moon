@@ -12,7 +12,8 @@ No es una lista "fija". La idea es que, cada vez que implementemos un feature nu
 Ya esta implementado y documentado:
 - Bloques + scopes + tail expression: `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`
 - `if/else` como expresion: `learning/steps/05-parser.md`, `learning/steps/09-typechecker.md`
-- Funciones top-level + llamadas por nombre: `learning/steps/03-ast.md`, `learning/steps/05-parser.md`
+- Funciones top-level: `learning/steps/03-ast.md`, `learning/steps/05-parser.md`
+- Funciones como valores (sin captures): `learning/steps/06-interpreter.md`, `learning/steps/09-typechecker.md`, `learning/steps/11-bytecode-and-vm.md`
 - `return expr?;` como statement dentro de funciones (early exit): `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`, `learning/steps/09-typechecker.md`
 - Typechecking estricto: `learning/steps/09-typechecker.md`
 - Runtime con heap + GC mark/sweep (arrays/objects): `learning/steps/10-runtime-and-gc.md`
@@ -25,7 +26,8 @@ Eso nos deja una base "completa" para seguir creciendo sin reescribir todo.
 
 Hoy Moon tiene funciones, pero con restricciones MVP:
 - se declaran solo en top-level
-- se llaman solo por nombre (el callee debe ser `Ident`)
+- son valores (puedes hacer `let f = add1; f(41)`)
+- no hay funciones anonimas (`fn` como expresion) todavia
 - no hay closures (no capturan variables locales)
 
 Para que Moon sea realmente "scripting" (estilo JS/TS), el salto grande es:
@@ -43,10 +45,12 @@ Un closure obliga a resolver:
 
 ### Plan incremental (recomendado)
 
-Paso A: funciones como valores, sin captures (barato)
-- Parser/AST: permitir referenciar funciones por nombre como expresion (ya existe `Expr::Ident`).
-- Typechecker: permitir asignar `Ident` de funcion a un `let` y cargar su tipo (ya existe `Type::Function`).
-- Interpreter/VM: representar un "function value" (ej: `Value::Function(FuncId)` o `Value::Function(String)`).
+Paso A: funciones como valores, sin captures (implementado)
+- Runtime: agregamos `Value::Function(name)`.
+- Resolucion de nombres: un `Ident` busca variable; si no existe, cae a funcion (vars shadow funciones).
+- Typechecker: `Ident` puede producir `Type::Function`, y `Call` valida por tipo (no por nombre).
+- Bytecode/VM: `LoadVar` cae a funcion si no hay variable; `CallValue(argc)` implementa llamadas indirectas.
+- Interpreter: evalua el callee como expresion y llama si produce `Value::Function`.
 
 Paso B: `fn` como expresion (anonimas), aun sin captures (medio)
 - Parser: agregar un `Expr::Fn` o similar (distinto de `Stmt::Fn` top-level).
@@ -239,11 +243,12 @@ Si tenemos que elegir un siguiente paso "con mejor ROI":
 Ya completamos:
 - spans en VM/bytecode + `moon disasm`
 - `return expr?;` (early exit dentro de funciones)
+- funciones como valores (sin captures): `let f = add1; f(41)`
 
 Siguiente trio con mejor impacto:
-1) funciones como valores (sin captures) y luego closures
-2) loops (`while`/`loop`) + `break`/`continue`
-3) performance: variables por slots (cuando empiece a doler)
+1) `fn` como expresion (anonimas), sin captures
+2) closures con captures (upvalues)
+3) loops (`while`/`loop`) + `break`/`continue`
 
 Cada uno de esos pasos mejora:
 - usabilidad del lenguaje
