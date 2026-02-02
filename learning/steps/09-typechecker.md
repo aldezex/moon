@@ -1,215 +1,227 @@
-# 09 - Typechecker estricto (moon check)
+# 09 - Typechecker estricto (semantica estatica)
 
-## Objetivo
-
-El typechecker de Moon valida programas antes de ejecutar:
-- variables deben existir donde se usan
-- operadores solo se aplican a tipos compatibles
-- `if` debe tener condicion Bool y ramas compatibles
-- llamadas a funciones deben matchear aridad y tipos
-- arrays/objects deben usarse correctamente (indexing, assignment)
-
-Esto transforma muchos "runtime bugs" en errores claros y tempranos.
+Moon ejecuta solo despues de typecheck.
+Este capitulo describe:
+- el sistema de tipos MVP
+- el algoritmo real en el repo
+- como modelamos `return` con `Never`
+- como tipamos funciones como valores, funciones anonimas y closures
 
 Crate:
 - `compiler/typechecker` (`moon_typechecker`)
 
 Archivos:
-- `compiler/typechecker/src/lib.rs` (algoritmo principal)
-- `compiler/typechecker/src/env.rs` (TypeEnv)
+- `compiler/typechecker/src/lib.rs` (algoritmo)
 - `compiler/typechecker/src/types.rs` (Type)
+- `compiler/typechecker/src/env.rs` (TypeEnv)
 - `compiler/typechecker/src/error.rs` (TypeError)
 
-## TypeExpr (en el AST) vs Type (del typechecker)
+## 0) Contrato del typechecker
 
-El parser produce anotaciones como `TypeExpr` (sintaxis):
-- `Int`
-- `Array<Int>`
-- `Object<String>`
+Input:
+- AST (`moon_core::ast::Program`)
 
-El typechecker hace "lowering" a su enum `Type`:
-- `Type::Int`
-- `Type::Array(Box<Type>)`
-- etc.
+Output:
+- `Type` del programa (tipo del tail expression o `Unit`)
+- o `TypeError { message, span }`
 
-Esto esta en `lower_type(...)` (`compiler/typechecker/src/lib.rs`).
+Invariante:
+- si typecheck pasa, interpreter/VM pueden asumir:
+  - ops se aplican a tipos validos
+  - indices correctos
+  - llamadas con aridad/tipos correctos
 
-## Tipos del MVP
+## 1) TypeExpr (parser) vs Type (typechecker)
+
+- `TypeExpr` vive en el AST (sintaxis)
+- `Type` vive en el typechecker (semantica)
+
+Lowering:
+- `lower_type(TypeExpr) -> Type`
+
+Limitacion MVP:
+- no hay sintaxis para function types en `TypeExpr`
+- pero `Type` si incluye `Type::Function`
+
+## 2) Tipos soportados (Type)
 
 Archivo:
 - `compiler/typechecker/src/types.rs`
 
-Soportamos:
-- `Int`
-- `Bool`
-- `String`
-- `Unit`
-- `Never` (interno: "esta expresion no produce valor", ej: por `return`)
-- `Array<T>`
-- `Object<T>` (map String -> T)
+```
+Int | Bool | String | Unit
+Array<T>
+Object<T>
+Function { params: Vec<Type>, ret: Type }
+Never
+```
 
-Notas:
-- `Object<T>` es un "map" con valores homogeneos (todos del mismo tipo).
-  - Esto es una simplificacion MVP; objetos estructurales estilo TS vendran despues.
+`Never` es especial:
+- significa "esta expresion no produce valor porque no continua" (diverge)
+- ejemplo: un bloque que ejecuta `return`
 
-## Errores (TypeError)
-
-Archivo:
-- `compiler/typechecker/src/error.rs`
-
-`TypeError` tiene:
-- `message`
-- `span`
-
-La CLI lo convierte a diagnostico via `Source::render_span`.
-
-## Entorno de tipos (TypeEnv)
+## 3) Environment de tipos (TypeEnv)
 
 Archivo:
 - `compiler/typechecker/src/env.rs`
-
-El typechecker necesita saber:
-- que variables existen en cada scope
-- que funciones existen (firmas)
 
 `TypeEnv` mantiene:
 - `globals: HashMap<String, Type>`
 - `scopes: Vec<HashMap<String, Type>>`
 - `funcs: HashMap<String, FuncSig>`
 
-Busqueda de variables:
+Regla de lookup:
 - scopes (inner -> outer) y luego globals
 
-## Algoritmo principal: dos pasadas
+## 4) Algoritmo principal (check_program)
 
 Archivo:
 - `compiler/typechecker/src/lib.rs`
 
-### Paso 0: builtins
+### 4.1 Builtins
 
-Antes de mirar el programa, registramos builtins:
-- `gc(): Unit`
+Antes de mirar el programa:
+- registramos `gc(): Unit`
 
-Esto permite que el lenguaje use GC como herramienta sin definir una funcion.
+Esto hace que `gc()` typecheckee sin declaracion.
 
-### Pass 1: recolectar firmas de funciones
+### 4.2 Dos pasadas para `Stmt::Fn`
 
-Recorremos `program.stmts` y para cada `Stmt::Fn`:
-- parseamos tipos de params y return
-- guardamos `FuncSig { params, ret }` en `env.funcs`
+Motivo:
+- call-before-definition
+- recursion
 
-Beneficio:
-- `f(1); fn f(x: Int) -> Int { x }` es valido
-- recursion es posible
+Pass 1:
+- recorre `program.stmts`
+- por cada `Stmt::Fn`:
+  - lower param types
+  - lower return type
+  - guarda `FuncSig` en `env.funcs`
 
-### Pass 2: typecheck de statements en orden
+Pass 2:
+- recorre statements en orden
+- regla "strict": una variable debe estar definida antes de usarse
 
-Regla de "estricto" para variables:
-- una variable debe estar declarada antes de usarse
+### 4.3 Contexto de return
 
-Se procesan:
+El typechecker pasa un contexto `current_ret: Option<&Type>`.
+- fuera de funciones: `None`
+- dentro de una funcion/closure: `Some(expected_ret)`
 
-1) `let name (: T)? = expr;`
-   - typecheck de `expr` -> `expr_ty`
-   - si hay anotacion `T`, se valida `T == expr_ty`
-   - se define `name` en el scope actual
+`Stmt::Return`:
+- error si `current_ret` es `None`
+- si hay expr, su tipo debe ser compatible con el return type esperado
 
-2) `target = expr;` (assignment statement)
-   - se typecheckea RHS
-   - el target debe ser un lvalue:
-     - `x` (misma type)
-     - `arr[i]` (i Int, RHS == T de Array<T>)
-     - `obj["k"]` (k String, RHS == T de Object<T>)
+## 5) Reglas de typing (resumen formal)
 
-3) `expr;`
-   - se typecheckea y se descarta
+Puedes pensarlo como un judgement:
 
-4) `return expr?;`
-   - solo permitido dentro de funciones
-   - el tipo de `expr` (o `Unit` si no hay expr) debe ser compatible con el return type declarado
-   - una vez que aparece un `return`, todo el block se considera "divergente" (tipo `Never`)
+`Gamma |- expr : T`
 
-5) `fn ...`
-   - el cuerpo se typecheckea en un scope nuevo con los parametros
-   - el tipo del cuerpo debe igualar el return type
+Donde `Gamma` es el environment (scopes/globals/funcs).
 
-### Tipo del programa
+### 5.1 Ident
 
-El tipo final es:
-- el tipo del `program.tail` si existe
-- o `Unit` si no
+En Moon, un identificador puede referirse a:
+- una variable
+- un item de funcion top-level
 
-## Reglas de expresiones (resumen)
+Implementacion:
+- `Expr::Ident`:
+  - si `env.get_var(name)` existe => ese tipo
+  - si no, si `env.get_fn(name)` existe => `Type::Function { ... }`
+  - si no => error
 
-Primitivas:
-- literales -> tipos obvios
-- ident -> busca variable; si no existe, busca funcion top-level y devuelve un `Type::Function`
+Eso habilita:
 
-Blocks:
-- empuja scope
-- typecheckea statements
-- tail expr -> tipo del bloque
-- si no hay tail -> Unit
+```moon
+fn add1(x: Int) -> Int { x + 1 }
+let f = add1;
+f(41)
+```
 
-If:
-- `cond` debe ser Bool
-- `then` y `else` deben tener el mismo tipo
-- el tipo del `if` es el tipo comun
-  - caso especial: si una rama es `Never` (por ejemplo termina en `return`), el tipo del `if` es el de la otra rama
+### 5.2 Call
 
-Array literal:
-- `[e1, e2, ...]` requiere que todos tengan mismo tipo
-- `[]` vacio:
-  - no se puede inferir
-  - se permite solo con anotacion contextual: `let a: Array<Int> = [];`
+`Expr::Call { callee, args }`:
+- se typecheckea `callee`
+- debe producir `Type::Function { params, ret }`
+- `args.len()` debe igualar `params.len()`
+- cada arg debe ser compatible con su param
+- tipo del call es `ret`
 
-Object literal:
-- `#{ k: v, ... }` requiere que todos los `v` tengan el mismo tipo
-- `#{}` vacio:
-  - no se puede inferir
-  - se permite con anotacion: `let o: Object<Int> = #{};`
+Nota:
+- ya no restringimos call a `Ident`.
+- cualquier expresion de tipo funcion es callable.
+
+### 5.3 Funciones anonimas (Expr::Fn)
+
+`Expr::Fn { params, ret_ty, body }`:
+- lower param types
+- lower return type
+- empuja scope con params
+- typecheckea `body` con `current_ret = Some(&ret)`
+- valida que el tipo del body sea compatible con `ret`
+- resultado es `Type::Function { params, ret }`
+
+Punto clave:
+- a diferencia de `Stmt::Fn`, aqui NO borramos scopes externos.
+- eso habilita captura lexical (closures).
+
+### 5.4 `Never` y control flow
+
+Para modelar `return`, necesitamos diverging control flow.
+
+Reglas practicas:
+- `Stmt::Return` hace que el statement "diverge".
+- un `Block`:
+  - si encuentra un statement divergente, el tipo del bloque es `Never`.
+- un `if`:
+  - si ramas tienen mismo tipo => ok
+  - si una rama es `Never`, el `if` toma el tipo de la otra
+
+Compatibilidad:
+- `compatible(expected, got)` es true si:
+  - `expected == got` o `got == Never`
+
+Eso permite:
+
+```moon
+fn f(x: Int) -> Int {
+  if x > 0 { return x; } else { };
+  x + 1
+}
+```
+
+## 6) Arrays y Objects (tipos homogeneos)
+
+`Array<T>`:
+- literal `[e1, e2, ...]` requiere todos del mismo tipo
+- `[]` no se puede inferir sin anotacion contextual
+
+`Object<T>`:
+- literal `#{ k: v, ... }` requiere todos los `v` del mismo tipo
+- `#{}` no se puede inferir sin anotacion
 
 Indexing:
 - `Array<T>[Int] -> T`
 - `Object<T>[String] -> T`
 
-Ops:
-- `Int (+-*/%) Int -> Int`
-- `String + String -> String`
-- comparaciones `Int < Int -> Bool`, etc.
-- `==`/`!=` requieren tipos iguales (-> Bool)
-- `&&`/`||` requieren Bool (-> Bool)
+## 7) Practica: lee el typechecker con closures
 
-Calls:
-- el callee es una expresion: debe tener tipo `Type::Function { params, ret }`
-- args deben matchear en tipo y cantidad
-- el tipo del `call` es `ret`
+Ejemplo:
 
-Nota (limitacion MVP): todavia no tenemos sintaxis para anotar tipos de funcion en el source,
-pero el typechecker los puede inferir en casos como:
-`fn add1(x: Int) -> Int { x + 1 } let f = add1; f(41)`
+```moon
+let c = { let x = 0; fn() -> Int { x = x + 1; x } };
+c() + c()
+```
 
-## Control flow y `Type::Never` (para `return`)
+Sigue estos puntos en `compiler/typechecker/src/lib.rs`:
+- `Expr::Fn` produce `Type::Function`.
+- Dentro del body, `Ident("x")` resuelve a la var del scope externo.
+- `Stmt::Return` (si existe) produce `Never`.
 
-`return` crea un problema interesante: no es que "tenga un tipo", es que corta el flujo de ejecucion.
+## 8) Ejercicios
 
-Para modelarlo sin hacks, el typechecker introduce un tipo especial:
-- `Never`: significa "esto no produce un valor porque no continua" (diverge).
-
-Como lo usamos:
-- `Stmt::Return` marca el statement como divergente.
-- Un `Block`:
-  - si encuentra un statement divergente, el tipo del bloque pasa a ser `Never` (no importa el tail expr).
-- Un `if`:
-  - si ambas ramas tienen el mismo tipo, ok.
-  - si una rama es `Never`, el `if` toma el tipo de la otra (porque en runtime solo queda esa rama).
-
-Regla de compatibilidad:
-- `Never` es compatible con cualquier tipo esperado.
-  - ejemplo: en una funcion `-> Int`, `return 1;` es ok, y el block que lo contiene puede tiparse como `Never`.
-
-## Mini ejercicios
-
-1) Agrega un tipo `Null` y reglas para `Object<Null>`.
-2) Agrega un builtin `print(x: String) -> Unit` y haz que sea reconocido como builtin.
-3) Implementa "contextual typing" mas general (pasar expected type a `check_expr`) para inferir `[]` aun sin let annotation (ej: como arg de funcion).
+1) Agrega sintaxis para function types en `TypeExpr`.
+2) Implementa records estructurales (no homogeneos) como tipo adicional.
+3) Agrega un builtin `print(x: String) -> Unit` y tipalo.

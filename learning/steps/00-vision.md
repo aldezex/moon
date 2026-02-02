@@ -1,83 +1,159 @@
-# 00 - Vision y principios
+# 00 - Vision y principios (Moon)
 
-## Que es Moon (en una frase)
+Este capitulo define el "contrato" del proyecto: objetivos, no-objetivos, y decisiones base.
+Si te pierdes en una implementacion, vuelve aqui: casi todo tradeoff importante se deriva de esto.
 
-Moon es un lenguaje de scripting (feedback rapido) con una arquitectura de compilador seria (spans, typechecker estricto, runtime con GC, VM).
+## 0) Que es Moon (definicion operativa)
 
-Piensalo como:
-- ergonomia de "script" (tipo JS/TS)
-- disciplina de "engine" (tipo Rust en tooling y claridad)
+Moon es un lenguaje de scripting con:
+- tipado estricto (sin `any` implicito)
+- semantica expresiva (bloques con tail expression, `if` como expresion)
+- tooling serio (spans, diagnosticos, LSP)
+- runtime con heap + GC
+- dos backends de ejecucion:
+  - interpreter (tree-walk) para iterar rapido
+  - bytecode + VM para performance/tooling
 
-## Objetivos
+Si lo quieres comparar:
+- UX/iteracion: JS/TS
+- disciplina de implementacion: Rust (capas claras, tipos, tests)
 
-1) Scripting de verdad
-   - `moon run file.moon` debe ser simple y rapido
-   - errores con contexto y ubicacion (line/col)
+## 1) Objetivos (lo que optimizamos)
 
-2) Tipado estricto
-   - sin `any` implicito
-   - reglas claras para operadores, `if`, llamadas, etc.
-   - el typechecker debe fallar temprano y con buen mensaje
+### 1.1 Strict typing que no estorba
 
-3) Base para performance
-   - empezamos con interpreter tree-walk para iterar en lenguaje
-   - sumamos un backend de bytecode + VM para escalar
+- Todo programa pasa por `moon_typechecker` antes de ejecutar.
+- No hay `any` implicito.
+- Los errores deben ser:
+  - deterministas
+  - con span (ubicacion exacta)
+  - accionables (mensaje + contexto)
 
-4) Runtime real (pensado para lenguaje dinamico)
-   - arrays y objects (maps)
-   - heap + GC por trazado (mark/sweep)
-   - prepara el terreno para closures y ciclos (a futuro)
+### 1.2 Lenguaje expresion-oriented
 
-## No-objetivos (por ahora)
+La sintaxis favorece construir valores:
+- Un bloque `{ ... }` puede producir un valor via tail expression.
+- `if ... else ...` es expresion.
 
-Esto es importante para no romper el ritmo:
-- no hay macros, lifetimes, ni borrow checker al estilo Rust
+Esto reduce "ceremonia" y simplifica la VM (mas expresiones, menos statements especiales).
+
+### 1.3 Scripting real: funciones como valores y closures
+
+Para parecerse a JS/TS, Moon necesita:
+- funciones como valores (`let f = add1; f(41)`)
+- funciones anonimas (`fn(...) -> ... { ... }` como expresion)
+- closures (captura lexical)
+
+En Moon (MVP actual):
+- las closures capturan variables locales por valor (snapshot shallow) en un environment heap-alloc
+- ese environment es mutable (puedes actualizar estado capturado dentro de la closure)
+
+### 1.4 Una base para escalar
+
+- Empezamos con interpreter para iterar semantica.
+- Movemos la misma semantica a bytecode+VM.
+- Mantener runtime compartido (Value/Heap/GC) evita divergencias.
+
+## 2) No-objetivos (por ahora)
+
+Importante para no romper ritmo:
+- no hay borrow checker, lifetimes, ownership al estilo Rust
+- no hay macros
 - no hay JIT
-- no hay un sistema de tipos estructural estilo TS completo (todavia)
-- no hay closures/capturas (todavia)
+- no hay modulos/imports
+- no hay loops (`while`/`for`) ni `break/continue`
+- no hay sintaxis de tipos de funcion en el source (el typechecker si maneja `Type::Function`)
 
-## Principios de diseño (practicos)
+## 3) Principios de diseno (reglas practicas)
 
-1) Capas con responsabilidades claras
-   - frontend (lexer/parser/AST) no "ejecuta"
-   - semantica:
-     - typechecker (valida)
-     - interpreter/VM (ejecutan)
-   - runtime (Value/heap/GC) compartido
+### 3.1 Capas con responsabilidades duras
 
-2) Todo error importante debe tener Span
-   - lex/parse/type/runtime deben poder apuntar al codigo que causo el problema
+- `compiler/core`:
+  - tokens, spans, AST, parser
+  - NO ejecuta
+- `compiler/typechecker`:
+  - valida semantica estatica
+  - produce errores con spans
+- backends:
+  - `compiler/interpreter`: ejecuta AST
+  - `compiler/bytecode` + `compiler/vm`: compila a IR y ejecuta
+- `compiler/runtime`:
+  - `Value`, heap, GC
+  - compartido por interpreter y VM
 
-3) MVP primero, generalidad despues
-   - implementamos la feature mas simple que desbloquea el siguiente paso
-   - refactor cuando el nuevo requisito sea real (no hipotetico)
+### 3.2 La semantica debe estar testeada en ambos backends
 
-## El pipeline completo (hoy)
+Cada feature importante debe tener tests:
+- interpreter (tree-walk)
+- VM (bytecode)
 
-Cuando ejecutas un archivo:
+Eso fuerza consistencia.
 
-```
-source text
-  -> lexer (tokens + spans)
-  -> parser (AST + spans)
-  -> typechecker (ok o TypeError con span)
-  -> backend:
-       - interpreter (tree-walk)  OR
-       - bytecode compiler + VM
-```
+### 3.3 Spans en todas las capas
 
-La CLI expone esto como:
-- `moon run file.moon` (typecheck + interpreter)
-- `moon vm file.moon` (typecheck + bytecode + VM)
-- `moon check file.moon` (solo typecheck)
+Cualquier error que le importe al usuario debe tener ubicacion:
+- lexer/parser/typechecker
+- runtime (interpreter) y VM
 
-## Memoria (decision)
+Implementacion:
+- `moon_core::span::Span` (rangos en bytes)
+- `moon_core::source::Source` renderiza spans a line/col y snippet
 
-En un lenguaje con heap objects (arrays/objects/closures), el enfoque mas practico suele ser:
-- heap con GC por trazado (mark/sweep)
+### 3.4 Semantica determinista (orden de evaluacion)
 
-Por que:
-- evita leaks por ciclos (RC se complica con ciclos)
-- la VM/interpreter pueden dar al GC un "root set" claro (globals, scopes, stack)
+Elegimos orden de evaluacion y lo fijamos con tests.
+Ejemplo (importante para side effects y `return`):
+- en `a[i] = rhs;` evaluamos `a` y `i` antes de `rhs` (VM e interpreter alineados)
 
-En Moon ya tenemos un GC mark/sweep simple en `moon_runtime` y un builtin `gc()` para dispararlo.
+## 4) Pipeline (lo que pasa cuando corres un archivo)
+
+Entrada: texto (source)
+
+1) Lexer
+- `source text -> Vec<Token>`
+- cada `Token` tiene `TokenKind` + `Span`
+
+2) Parser
+- `Vec<Token> -> Program (AST)`
+- AST mantiene spans
+
+3) Typechecker
+- valida tipos, variables, aridad, etc
+- errores con span
+
+4) Backend
+- interpreter (AST) o bytecode+VM
+
+## 5) Memoria (decision)
+
+Moon tiene heap objects:
+- arrays
+- objects
+- closures (environment)
+
+Decision MVP:
+- GC mark/sweep
+
+Razon:
+- ciclos no son un problema (a diferencia de RC puro)
+- el "root set" es claro:
+  - globals
+  - scopes (frames)
+  - operand stack (VM)
+  - closures activas (frame.closure)
+
+Nota:
+- el builtin `gc()` dispara un ciclo manualmente para debug.
+
+## 6) Como trabajar en features (workflow)
+
+Para agregar una feature de lenguaje:
+1) AST + parser
+2) typechecker
+3) interpreter
+4) bytecode compiler
+5) VM
+6) tests en interpreter + VM
+7) actualizar `learning/*`
+
+Esta disciplina evita que Moon crezca como "demo" y se vuelve una base real.

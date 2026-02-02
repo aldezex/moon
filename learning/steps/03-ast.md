@@ -1,138 +1,142 @@
 # 03 - AST (Abstract Syntax Tree)
 
-## AST vs CST (idea rapida)
+El AST es el "IR" humano: una representacion estructural del programa.
+En Moon, el AST es el contrato entre:
+- parser
+- typechecker
+- interpreter
+- bytecode compiler
 
-Cuando parseas texto tienes dos caminos:
+Si el AST esta mal diseniado, todo lo demas se vuelve doloroso.
 
-- CST (Concrete Syntax Tree): mantiene casi todo "tal cual" esta escrito (incluye muchas cosas de formato).
-- AST (Abstract Syntax Tree): representa la estructura semantica del programa.
-
-Moon usa AST porque:
-- el interpreter y la VM quieren "estructura", no tokens
-- el typechecker quiere reglas sobre expresiones, no sobre caracteres
-- el formatter/LSP a futuro tambien se benefician
-
-## Archivo principal
-
+Archivo principal:
 - `compiler/core/src/ast/mod.rs`
 
-## Program: statements + tail expression
+## 0) AST vs CST (rapido, pero con criterio)
 
-Moon sigue una regla estilo Rust:
-- `expr;` descarta el valor (es un statement)
-- la ultima expresion **sin** `;` es el resultado del bloque/programa
+- CST (Concrete Syntax Tree): preserva casi todo lo textual (tokens, parentesis, etc)
+- AST (Abstract Syntax Tree): preserva estructura semantica
 
-Para modelar esto sin trucos:
+Moon usa AST porque:
+- el evaluator (interpreter/VM) quiere estructura, no puntuacion
+- el typechecker quiere reglas sobre nodos semanticos
+- tooling (LSP/diagnosticos) cuelga de spans del AST
 
-- `Program { stmts: Vec<Stmt>, tail: Option<Expr> }`
+## 1) Program: statements + tail expression
 
-El valor del programa:
-- si `tail` existe, es ese valor
-- si no, `Unit`
+Moon es expresion-oriented, estilo Rust:
+- `expr;` descarta el valor (statement)
+- la ultima expresion sin `;` es el valor del bloque/programa
 
-Esto hace que:
-- `let x = 1; x` tenga resultado `1`
-- `let x = 1; x;` tenga resultado `Unit`
+Por eso `Program` es:
+- `stmts: Vec<Stmt>`
+- `tail: Option<Expr>`
 
-## Statements (Stmt)
+Esto evita hacks (como convertir todo a statement) y hace que el backend sea directo.
 
-Hoy:
+## 2) Statements (Stmt)
 
-1) `Let`
-   - `let name (: Type)? = expr;`
-   - modelado como:
-     - `name: String`
-     - `ty: Option<TypeExpr>`
-     - `expr: Expr`
-     - `span: Span`
+### 2.1 `Stmt::Let`
+- `let name (: Type)? = expr;`
 
-2) `Assign` (assignment statement)
-   - `target = expr;`
-   - donde `target` por ahora puede ser:
-     - un identificador (`x`)
-     - un index (`arr[0]`, `obj["k"]`)
+### 2.2 `Stmt::Assign`
+- `target = expr;`
+- `target` valido (MVP):
+  - `Ident`
+  - `Index`
 
-3) `Return`
-   - `return expr?;`
-   - `expr` es opcional (`return;` devuelve `Unit`)
-   - semantica: solo permitido dentro de funciones (lo valida el typechecker)
-   - modelado como:
-     - `expr: Option<Expr>`
-     - `span: Span`
+### 2.3 `Stmt::Return`
+- `return expr?;`
+- `return;` equivale a devolver `Unit`
 
-4) `Fn` (declaracion de funcion, top-level)
-   - `fn name(params...) -> Type { ... }`
-   - el body es un `Expr` (normalmente un Block)
+Regla semantica:
+- solo permitido dentro de funciones/closures (lo valida el typechecker)
 
-5) `Expr` (expression statement)
-   - `expr;`
-   - se evalua y se descarta
+### 2.4 `Stmt::Fn` (item top-level)
+- `fn name(params...) -> Type { ... }`
 
-## TypeExpr: tipos en el AST
+Nota:
+- es un item, no una expresion.
+- permite call-before-definition via pre-pass.
 
-Moon tiene tipado estricto, asi que necesitamos representar tipos en el AST.
+### 2.5 `Stmt::Expr`
+- `expr;`
 
-Hoy soportamos:
+## 3) TypeExpr: sintaxis de tipos
 
-- `TypeExpr::Named("Int" | "Bool" | "String" | "Unit")`
-- `TypeExpr::Generic { base, args }`
-  - ejemplo: `Array<Int>`, `Object<String>`
+El parser produce `TypeExpr` (sintaxis):
+- `Named("Int"|"Bool"|"String"|"Unit")`
+- `Generic { base, args }` (ej: `Array<Int>`, `Object<String>`)
 
-Nota: esto es sintaxis de tipos, no "types ya resueltos".
-El typechecker hace "lowering" de `TypeExpr` a su propio enum `Type`.
+El typechecker hace lowering a `Type`.
 
-## Expressions (Expr)
+Limitacion MVP importante:
+- aun no hay sintaxis para tipos de funcion (ej: `(Int)->Int`) en el source
+- pero el typechecker si tiene `Type::Function` internamente
 
-Primitivas:
-- `Int(i64, Span)`
-- `Bool(bool, Span)`
-- `String(String, Span)`
-- `Ident(String, Span)`
+## 4) Expressions (Expr)
 
-Agregados (heap objects):
-- `Array { elements, span }`
-  - `[1, 2, 3]`
-- `Object { props, span }`
-  - `#{ a: 1, "b": 2 }`
+### 4.1 Literales y variables
+- `Int`, `Bool`, `String`, `Ident`
 
-Control:
-- `Block { stmts, tail, span }`
-  - `{ let x = 1; x }`
-- `If { cond, then_branch, else_branch, span }`
-  - `if cond { ... } else { ... }`
+### 4.2 Funciones anonimas (Expr::Fn)
+- sintaxis:
+  - `fn(params...) -> Type { ... }`
+- produce un **valor**:
+  - en runtime es una closure (`Value::Closure`) con environment capturado
 
-Operadores:
-- `Unary { op, expr, span }`
-  - `-x`, `!x`
-- `Binary { lhs, op, rhs, span }`
-  - `+ - * / %`
-  - `== != < <= > >= && ||`
+Nota:
+- `Stmt::Fn` define un item top-level (nombre obligatorio)
+- `Expr::Fn` es anonima (no nombre) y puede aparecer en cualquier expresion
 
-Calls + indexing:
-- `Call { callee, args, span }`
-  - `f(1, 2)`
-  - el callee es una expresion (por ejemplo, puedes hacer `let g = f; g(1, 2)`)
-  - el typechecker valida que el callee tenga tipo de funcion `(...) -> ...`
-- `Index { target, index, span }`
-  - `arr[0]`
-  - `obj["k"]`
+### 4.3 Agregados
+- `Array { elements }`
+- `Object { props }`
 
-Grouping:
-- `Group { expr, span }`
-  - `(expr)`
+### 4.4 Control y estructura
+- `Block { stmts, tail }`
+- `If { cond, then_branch, else_branch }`
 
-## Spans: por que cada nodo tiene uno
+### 4.5 Operadores
+- `Unary { op, expr }`
+- `Binary { lhs, op, rhs }`
 
-Span es el pegamento del tooling:
-- errores con ubicacion exacta
-- en la VM, a futuro, mapear `ip -> span` para errores de runtime
-- refactors: agregar features sin perder diagnosticos
+### 4.6 Call e Index
+- `Call { callee: Expr, args }`
+  - el callee es una expresion: puede ser `Ident`, `Expr::Fn`, una variable que contiene closure, etc.
+- `Index { target, index }`
 
-Regla de oro:
-- si un nodo representa algo que el usuario escribio, debe tener Span.
+## 5) Spans como pegamento
 
-## Mini ejercicios
+Cada nodo relevante tiene `Span`.
+Regla:
+- si es algo que el usuario escribio, tiene span.
 
-1) Agrega un nuevo literal (por ejemplo `null`) al AST.
-2) Agrega un `Expr::While` (solo el AST, sin parser/interpreter) para practicar.
-3) Cambia `Object` para permitir keys computed (ej: `#{ "a" + "b": 1 }`) y piensa el impacto.
+Los spans habilitan:
+- errores con ubicacion
+- debug info en bytecode
+- hover/definition en LSP
+
+## 6) Ejemplo: AST mental de una closure
+
+Codigo:
+
+```moon
+let f = { let x = 10; fn(y: Int) -> Int { x + y } };
+f(1)
+```
+
+Conceptualmente:
+- `Stmt::Let(name=f, expr=Expr::Block(... tail = Expr::Fn(...)))`
+- `Expr::Fn` contiene:
+  - params: `[y: Int]`
+  - ret_ty: `Int`
+  - body: `Expr::Block(tail = x + y)`
+
+El runtime capturara `x` dentro de la closure.
+
+## 7) Ejercicios
+
+1) Agrega `Null` al AST (solo AST) y decide si es literal o keyword.
+2) Agrega `Expr::While` (solo AST) y discute que spans deberia cubrir.
+3) Piensa como representarias function types en `TypeExpr` sin romper el parser (conflicto con `(` en expresiones).

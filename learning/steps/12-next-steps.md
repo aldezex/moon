@@ -1,256 +1,171 @@
 # 12 - Proximos pasos (roadmap vivo)
 
-Este capitulo es un mapa practico: que ya esta implementado, que queda, y (lo mas importante) como pensar el diseno/implementacion en un lenguaje real.
+Este documento es un roadmap tecnico.
+No es una lista fija: cada feature nueva debe mover items de "pendiente" a "implementado".
 
-No es una lista "fija". La idea es que, cada vez que implementemos un feature nuevo, volvamos aqui:
-- lo movemos de "Roadmap" a "Implementado"
-- anotamos las decisiones y tradeoffs que hicimos
-- agregamos tests y links a los archivos tocados
+Formato recomendado por item:
+- motivacion
+- decision de diseno
+- plan incremental
+- archivos tocados
+- tests agregados
 
-## 0) Checklist de lo que ya tenemos (MVP)
+## 0) Checklist (estado actual)
 
-Ya esta implementado y documentado:
-- Bloques + scopes + tail expression: `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`
-- `if/else` como expresion: `learning/steps/05-parser.md`, `learning/steps/09-typechecker.md`
-- Funciones top-level: `learning/steps/03-ast.md`, `learning/steps/05-parser.md`
-- Funciones como valores (sin captures): `learning/steps/06-interpreter.md`, `learning/steps/09-typechecker.md`, `learning/steps/11-bytecode-and-vm.md`
-- `return expr?;` como statement dentro de funciones (early exit): `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`, `learning/steps/09-typechecker.md`
-- Typechecking estricto: `learning/steps/09-typechecker.md`
-- Runtime con heap + GC mark/sweep (arrays/objects): `learning/steps/10-runtime-and-gc.md`
-- Bytecode + VM: `learning/steps/11-bytecode-and-vm.md`
-- Language Server (LSP): `learning/steps/13-language-server.md`
+Implementado y con tests:
+- Bloques + scopes + tail expression
+- `if/else` como expresion
+- `return expr?;` como statement (modelado con `Type::Never`)
+- Typechecking estricto
+- Runtime: heap + GC mark/sweep
+- Bytecode + VM con spans por instruccion + errores con spans
+- `moon disasm`
+- LSP (diagnostics/hover/definition/completion basico)
 
-Eso nos deja una base "completa" para seguir creciendo sin reescribir todo.
+Funciones y closures:
+- funciones top-level (`Stmt::Fn`) + call-before-definition
+- funciones como valores (`Value::Function(name)`)
+- funciones anonimas (`Expr::Fn`) como expresion
+- closures con captura lexical:
+  - runtime: `Value::Closure(GcRef)` + `HeapObjectKind::Closure`
+  - bytecode: `MakeClosure` + `CallValue`
+  - VM frames con `closure: Option<GcRef)`
 
-## 1) Funciones de verdad: funciones como valores + closures (prioridad alta)
+## 1) Tipos de funcion en la sintaxis (alta prioridad)
 
-Hoy Moon tiene funciones, pero con restricciones MVP:
-- se declaran solo en top-level
-- son valores (puedes hacer `let f = add1; f(41)`)
-- no hay funciones anonimas (`fn` como expresion) todavia
-- no hay closures (no capturan variables locales)
+### Problema
 
-Para que Moon sea realmente "scripting" (estilo JS/TS), el salto grande es:
-- tratar funciones como valores: `let f = add1; f(41)`
-- permitir funciones anonimas: `let f = fn(x: Int) -> Int { x + 1 };`
-- permitir closures: `let make = fn(x: Int) -> fn(Int)->Int { fn(y: Int)->Int { x + y } }`
+Hoy el typechecker maneja `Type::Function`, pero el source NO puede escribir:
+- el tipo de una variable funcion
+- el tipo de retorno de una funcion que retorna otra funcion
 
-### Por que es dificil (y por que vale la pena)
+Eso bloquea:
+- `fn make_adder(x: Int) -> (Int)->Int { ... }`
 
-Un closure obliga a resolver:
-- representacion: como guardo "codigo" + "ambiente capturado"
-- type system: cual es el tipo exacto de la funcion (incluyendo args/ret)
-- runtime/GC: el ambiente capturado vive en heap y tiene que ser trazable
-- VM: como compilo/ejecuto `UpvalueGet` / `UpvalueSet` (o equivalente)
+### Opcion A (recomendada)
 
-### Plan incremental (recomendado)
+Agregar sintaxis de function type:
+- `(T1, T2) -> R`
 
-Paso A: funciones como valores, sin captures (implementado)
-- Runtime: agregamos `Value::Function(name)`.
-- Resolucion de nombres: un `Ident` busca variable; si no existe, cae a funcion (vars shadow funciones).
-- Typechecker: `Ident` puede producir `Type::Function`, y `Call` valida por tipo (no por nombre).
-- Bytecode/VM: `LoadVar` cae a funcion si no hay variable; `CallValue(argc)` implementa llamadas indirectas.
-- Interpreter: evalua el callee como expresion y llama si produce `Value::Function`.
+En `TypeExpr`:
+- `TypeExpr::Function { params: Vec<TypeExpr>, ret: Box<TypeExpr>, span }`
 
-Paso B: `fn` como expresion (anonimas), aun sin captures (medio)
-- Parser: agregar un `Expr::Fn` o similar (distinto de `Stmt::Fn` top-level).
-- Typechecker: generar un tipo de funcion desde params/ret y typecheckear body.
-- Bytecode: compilar la funcion a un Function interno y devolver un handle en runtime.
+Parser:
+- necesita desambiguar `(` de tipos vs expresiones
+- como los tipos solo se parsean en contexto de tipos, es manejable
 
-Paso C: closures con captures (caro, pero desbloquea todo)
-- Frontend: decidir "que se captura" (solo lectura vs mut, por referencia vs por valor).
-- Runtime: agregar `Value::Closure(GcRef)` con un objeto heap que contenga:
-  - id de funcion (o pointer al Function en el Module)
-  - vector/map de valores capturados (upvalues)
-- VM: agregar instrucciones para:
-  - crear closure (con capturas)
-  - leer/escribir upvalues durante ejecucion
-- GC: marcar upvalues como children del closure.
+Typechecker:
+- lowering directo a `Type::Function`
 
-Archivos que probablemente cambian:
-- `compiler/core/src/ast/mod.rs` (Expr::Fn / Expr::Call callee general)
-- `compiler/core/src/parser/mod.rs` (parse de `fn` como expr)
-- `compiler/typechecker/src/lib.rs` (callee ya no es solo ident; closures)
-- `compiler/runtime/src/value.rs` y `compiler/runtime/src/heap.rs` (Closure)
-- `compiler/bytecode/src/compiler.rs` + `compiler/bytecode/src/instr.rs` (MakeClosure, Upvalue ops)
-- `compiler/vm/src/vm.rs` (frames con closure env)
+Tests:
+- anotaciones de let con function type
+- funciones que retornan funciones
 
-## 2) Control flow: `return`, loops, break/continue
+## 2) Closures "serias": upvalues por referencia
 
-Hoy todo es "expresion" y la salida de una funcion depende del tail expression del block.
-Eso funciona, pero en la practica queremos control flow explicito.
+### Problema
 
-Estado:
-- `return expr?;` implementado (early exit claro).
-- loops (`while`, `loop`, quizas `for`) pendiente.
-- `break` / `continue` pendiente.
+Hoy capturamos por valor (snapshot). Eso es util, pero no replica JS/TS:
+- mutaciones del outer scope despues de crear la closure no se ven
 
-### `return`: diseno y decisiones (lo que hicimos)
+### Objetivo
 
-Sintaxis:
-- `return expr?;`
-  - `return;` devuelve `Unit`
+Soportar captura por referencia (upvalues):
+- una variable capturada se representa como un "cell" heap-alloc
+- closures comparten ese cell
 
-Reglas:
-- `return` solo se permite dentro de funciones (lo valida el typechecker).
-- Si un `return` "escapa" al top-level, es error (guardrail en interpreter).
+### Plan incremental
 
-Implementacion (patron reusable para loops):
-- Typechecker:
-  - agregamos `Type::Never` para modelar "diverge" (un bloque/rama que no produce valor).
-  - regla clave: `Never` es compatible con cualquier tipo esperado.
-- Interpreter:
-  - `eval_*` propaga `Return(value)` hacia arriba hasta que el handler de llamadas lo consume.
-- Bytecode/VM:
-  - el bytecode ya tenia `Instr::Return`; ahora compila `Stmt::Return` a `Return` (con span del statement).
+Paso A: cells en runtime
+- agregar `HeapObjectKind::Cell(Value)` o similar
+- agregar `Value::Cell(GcRef)` o representar cell solo en heap
 
-Archivos clave:
-- `compiler/core/src/ast/mod.rs`
-- `compiler/core/src/parser/mod.rs`
-- `compiler/typechecker/src/lib.rs`
-- `compiler/interpreter/src/eval.rs`
-- `compiler/bytecode/src/compiler.rs`
+Paso B: lifting de locals capturados
+- cuando una var es capturada, su storage pasa a ser heap cell
+- loads/sets se vuelven deref
 
-### Como se implementa sin volverse loco
+Paso C: bytecode
+- instrucciones dedicadas:
+  - `UpvalueGet(slot)`
+  - `UpvalueSet(slot)`
+  - o `LoadCell/StoreCell`
 
-En interpreter y VM suele aparecer el mismo patron:
-- introducis un tipo de control-flow "no local"
-  - ej: `EvalResult = Value | ControlFlow`
-  - donde `ControlFlow` puede ser `Return(Value)`, `Break(Value?)`, `Continue`
-- y propagas eso hacia arriba hasta que alguien lo consume (una funcion consume `Return`, un loop consume `Break/Continue`).
+Paso D: typechecker
+- semantica de mutabilidad (si agregamos `let` inmutable vs `mut`)
 
-En bytecode:
-- `return` compila directo a `Instr::Return` (ya existe)
-- `while`/`loop` requiere patching de jumps (como `if`)
-- `break`/`continue` necesitan que el compiler lleve una stack de "labels" de loop para saber a donde saltar
+Esta es una feature grande; requiere diseno cuidadoso.
 
-## 3) Tipos mas expresivos (sin perder el "estricto")
+## 3) Loops + break/continue
 
-El typechecker MVP hoy tiene una simplificacion importante:
-- `Object<T>` es homogeneo: todas las values deben ser `T`
+### Objetivo
 
-Eso simplifica arrays/objects, pero limita mucho:
-- `#{ a: 1, b: "x" }` no es posible (mezcla Int y String)
+Agregar:
+- `while cond { ... }`
+- `loop { ... }`
+- `break` / `continue`
 
-### Opciones de diseno (hay que elegir)
+### Patron de implementacion
 
-Opcion 1: mantener `Object<T>` y agregar "records" estructurales
-- `Object<T>` sigue siendo map dinamico (String -> T)
-- Agregas `Record{a: Int, b: String}` como tipo distinto (campos fijos)
-- Nuevas reglas:
-  - literal `#{ a: 1, b: "x" }` puede inferir `Record{a:Int,b:String}`
-  - indexing con string literal `"a"` puede resolverse a campo (si es record)
-  - (opcional) sumar sintaxis `o.a` (dot access) para records
+- en interpreter:
+  - extender el enum de control flow:
+    - `Return`, `Break`, `Continue`
+- en bytecode:
+  - patching de jumps
+  - stack de labels por loop
 
-Opcion 2: union types / sum types (mas potente, mas caro)
-- `Object<Int | String>` permitiria mezcla, pero complica toda la semantica (operadores, narrowing, etc.)
+### Tests
 
-Opcion 3: un `Any` (NO recomendado si queremos "sin any implicito")
-- rompe el objetivo principal.
+- loops simples
+- break/continue
+- interaccion con `return`
 
-Para Moon, la opcion 1 suele ser el mejor paso incremental:
-mantienes un map dinamico tipado, y sumas records tipados cuando queres estructura.
+## 4) Performance: variables por slots
 
-## 4) Errores mejorados: spans en VM/bytecode + disassembler
+Hoy interpreter y VM usan HashMaps por scope:
+- `LoadVar/SetVar` hacen hashing
+- scopes allocan HashMaps
 
-Estado: implementado (MVP).
+Upgrade clasico:
+- resolver variables a slots en compilacion
+- frame guarda `Vec<Value>`
+- instrucciones:
+  - `LoadLocal(slot)` / `StoreLocal(slot)`
 
-Lo que agregamos:
+Esto tambien prepara:
+- upvalues (closures por referencia)
 
-1) Debug info: Span por instruccion
-- En `compiler/bytecode`, `Instr` es `Instr { kind, span }`.
-- El compiler asigna el span del nodo AST que genero esa instruccion.
+## 5) Tipos mas expresivos (records)
 
-Archivos:
-- `compiler/bytecode/src/instr.rs`
-- `compiler/bytecode/src/compiler.rs`
+Hoy:
+- `Object<T>` es homogeneo
 
-2) Errores de VM con ubicacion
-- `VmError` ahora incluye `span`.
-- La VM mantiene `current_span` (span de la instruccion actual) y lo pega a los errores.
+Para escribir:
+- `#{ a: 1, b: "x" }`
 
-Archivos:
-- `compiler/vm/src/error.rs`
-- `compiler/vm/src/vm.rs`
+Opcion incremental:
+- agregar `Record{a:Int,b:String}` como tipo estructural
+- mantener `Object<T>` como map dinamico
 
-3) `moon disasm <file>`
-- Comando de CLI que imprime funciones + bytecode con `ip` y spans.
+Parser:
+- sintaxis de tipo record
+Typechecker:
+- reglas de acceso (index con string literal)
 
-Archivos:
-- `src/main.rs` (cmd `disasm`)
+## 6) Modulos/imports
 
-Ver mas detalle en:
-- `learning/steps/11-bytecode-and-vm.md`
+Sin modulos, todo vive en un archivo.
+Plan MVP:
+- `import "path"`
+- loader con cache (un modulo se evalua una vez)
 
-## 5) Performance en VM: variables por slots (y menos HashMap)
+## 7) Runtime: auto-GC + builtins
 
-La VM MVP usa HashMaps por scope, como el interpreter. Es simple y correcto, pero no escala bien:
-- cada LoadVar/SetVar hace hashing de string
-- cada scope crea un HashMap
+- auto-GC por heuristica
+- builtins tipados:
+  - `print`, `dbg`, `len`, `push`
 
-El upgrade clasico:
-- en compilacion, resolves variables a "slots" (indices) dentro de un frame
-- el frame guarda `Vec<Value>` en vez de HashMap
-- `LoadLocal(slot)` y `StoreLocal(slot)` son O(1) y no asignan strings
+## 8) Calidad
 
-Esto tambien te obliga a definir bien:
-- locals vs globals
-- como se resuelven capturas (closures), que pasan a ser upvalues
-
-## 6) Runtime: auto-GC, strings mejores, builtins utiles
-
-Ya tenemos heap + GC mark/sweep, pero falta "producto":
-
-Auto-GC (heuristica):
-- correr GC cada N allocs, o cuando heap slots crecen mas de X%
-- expone counters para debug (bytes allocados, objetos vivos)
-
-Strings:
-- interning (para keys frecuentes)
-- slicing/rope (si apuntamos a performance, no es necesario al principio)
-
-Builtins:
-- `print(x)` / `dbg(x)`
-- `len(array|string|object)`
-- `push(array, x)` (o metodo `array.push(x)` si sumamos dot calls)
-
-Nota: aunque el lenguaje sea estricto, los builtins tambien deben estar tipados en `compiler/typechecker`.
-
-## 7) Modulos, imports y stdlib
-
-Sin modulos, todo vive en un archivo. Para crecer:
-- `import "path/to/file.moon"`
-- un loader con cache (un modulo se evalua una vez)
-- nombres exportados (por ahora podria ser "todo lo top-level es publico")
-
-En una version "seria":
-- namespaces
-- `export` explicito
-- stdlib versionada y testeada
-
-## 8) Calidad: mas tests, fuzzing y golden files
-
-Cuando el lenguaje crece, lo que mas duele son regresiones silenciosas.
-Ideas practicas:
-- tests "pipeline" que corran tanto `moon run` como `moon vm` con el mismo input y comparen outputs
-- golden tests (input -> output esperado)
-- fuzzing del lexer/parser (que no panic; que reporte errores con spans validos)
-
-## 9) Que feature hacemos ahora (sugerencia)
-
-Si tenemos que elegir un siguiente paso "con mejor ROI":
-
-Ya completamos:
-- spans en VM/bytecode + `moon disasm`
-- `return expr?;` (early exit dentro de funciones)
-- funciones como valores (sin captures): `let f = add1; f(41)`
-
-Siguiente trio con mejor impacto:
-1) `fn` como expresion (anonimas), sin captures
-2) closures con captures (upvalues)
-3) loops (`while`/`loop`) + `break`/`continue`
-
-Cada uno de esos pasos mejora:
-- usabilidad del lenguaje
-- estructura del runtime/VM
-- calidad de los diagnosticos
+- golden tests
+- fuzzing del lexer/parser
+- differential tests interpreter vs VM

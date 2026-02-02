@@ -1,101 +1,107 @@
-# 07 - CLI (moon run / moon ast / moon check / moon vm / moon disasm)
+# 07 - CLI (moon)
 
-## Objetivo
-
-La CLI es el "entrypoint" del repo:
-- lee un archivo (o stdin)
-- corre el pipeline (lex/parse/typecheck/ejecucion)
-- imprime errores con contexto
+El CLI es la interfaz de usuario del toolchain.
+No es "solo un runner": es un punto de integracion de todas las capas.
 
 Archivo:
 - `src/main.rs`
 
-## Convencion clave: ';' y tail expression
+## 0) Filosofia
 
-Regla estilo Rust:
-- `expr;` descarta el valor (statement)
-- la ultima expresion **sin** `;` es el valor del programa/bloque
+- Cada comando corre el mismo frontend:
+  - load source
+  - lex
+  - parse
+  - typecheck
 
-Ejemplo:
-- `let x = 1; x` imprime `1`
-- `let x = 1; x;` no imprime nada (resultado `Unit`)
+- Luego, segun comando, elige backend:
+  - interpreter (`moon run`)
+  - bytecode+VM (`moon vm`)
 
-## Comandos
+Esto garantiza:
+- consistencia entre backends
+- errores antes de ejecutar
 
-### `moon ast <file>`
+## 1) Comandos
 
+### 1.1 `moon run <file>`
+Ejecuta con el interpreter.
 Pipeline:
-- load -> lex -> parse -> print AST (`{program:#?}`)
+1) `Source::from_path` (o stdin si `<file> == "-"`)
+2) `moon_core::lexer::lex`
+3) `moon_core::parser::parse`
+4) `moon_typechecker::check_program`
+5) `moon_interpreter::eval_program`
 
-Sirve para:
-- debug del parser
-- entender el shape del AST
+Output:
+- imprime el valor final si no es `Unit`
 
-### `moon check <file>`
+Errores:
+- lex/parse/type/runtime se imprimen con `Source::render_span`
 
+### 1.2 `moon vm <file>`
+Ejecuta con bytecode+VM.
 Pipeline:
-- load -> lex -> parse -> typecheck
+1) lex/parse/typecheck (igual)
+2) `moon_bytecode::compile`
+3) `moon_vm::run`
 
-Si pasa:
+Output y errores:
+- igual que `run`, pero errores vienen de la VM
+
+### 1.3 `moon check <file>`
+Solo typecheck.
 - imprime `ok: <Type>`
 
-Si falla:
-- imprime `type error: ...` con span
+### 1.4 `moon ast <file>`
+Imprime el AST (debug `#?`).
+Util para:
+- validar parseo
+- entender spans
 
-### `moon run <file>` (interprete)
-
-Pipeline:
-- load -> lex -> parse -> typecheck -> interpreter
-
-Si el valor final no es `Unit`, se imprime.
-
-### `moon vm <file>` (bytecode + VM)
+### 1.5 `moon disasm <file>`
+Imprime el bytecode del modulo.
 
 Pipeline:
-- load -> lex -> parse -> typecheck -> compile(bytecode) -> VM
+1) lex/parse/typecheck
+2) compile a `Module`
+3) imprime funciones + instrucciones
 
 Nota:
-- En esta etapa el "compile error" es raro (la mayoria de cosas ya deberian estar validadas por typecheck/parser).
+- cada instruccion incluye el `Span` que la genero
+- se imprime `@line:col [start..end]` usando `Source::line_col`
 
-### `moon disasm <file>` (bytecode disassembler)
+Esto es clave para tooling:
+- cuando la VM falla, el span te lleva a la expresion origen
 
-Pipeline:
-- load -> lex -> parse -> typecheck -> compile(bytecode) -> print
+## 2) Implementacion (donde mirar)
 
-Imprime el bytecode por funcion:
-- `ip` (instruction pointer)
-- instruccion (kind)
-- span + line/col aproximado en el source
+`src/main.rs` implementa:
+- parse manual de args (MVP)
+- un handler por comando:
+  - `cmd_run`, `cmd_vm`, `cmd_check`, `cmd_ast`, `cmd_disasm`
 
-Sirve para:
-- entender que genera el compilador
-- debuggear bugs de VM/bytecode
-- validar que dos expresiones distintas generan bytecode distinto (precedencias, scopes, etc)
+Cada handler:
+- retorna `Result<(), i32>` para manejar exit codes
 
-## Input: file vs stdin
+## 3) Practica: debugging con `disasm`
 
-Convencion:
-- si `<file>` es `-`, se lee de stdin
-- si no, se lee del filesystem
+Ejemplo:
 
-Esto permite:
-- `cat examples/hello.moon | cargo run -- run -`
+```moon
+let c = { let x = 0; fn() -> Int { x = x + 1; x } };
+c() + c()
+```
 
-## Errores (como se imprimen)
+- corre `moon disasm` y busca:
+  - `MakeClosure` (creacion de closure)
+  - `CallValue` (llamada indirecta)
+  - `LoadVar`/`SetVar` de `x`
 
-En la CLI convertimos errores a diagnosticos humanos via:
-- `Source::render_span(span, message)`
+Esto te muestra como el source se transforma en instrucciones.
 
-Tipos de error:
-- lex error: `LexError` (span del token/char)
-- parse error: `ParseError` (span del token/expr)
-- type error: `TypeError` (span del nodo)
-- runtime error (interpreter): `RuntimeError` (span del nodo)
-- compile error (bytecode): `CompileError` (span del nodo)
-- vm error: `VmError` (message + span por instruccion)
+## 4) Ejercicios
 
-## Mini ejercicios
-
-1) Agrega `moon tokens <file>` que imprima la lista de tokens (kind + span).
-2) Agrega `moon fmt <file>` (aunque sea un stub) para reservar el comando.
-3) Mejora `moon disasm` para que tambien imprima el texto de la linea (usa `Source::render_span`).
+1) Agrega un comando `tokens` que imprima tokens+spans.
+2) Agrega un comando `type-at <offset>` (solo para jugar) que use `check_program_with_spans`.
+3) Cambia el CLI para aceptar `--backend=vm|interp` y unifica `run`.

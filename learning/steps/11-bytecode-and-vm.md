@@ -1,29 +1,17 @@
 # 11 - Bytecode + VM (AST -> bytecode -> VM)
 
-## Por que agregar bytecode si ya hay interpreter
+El interpreter es ideal para iterar, pero no escala.
+La VM ejecuta una representacion compacta: bytecode.
 
-El tree-walk interpreter es genial para iterar:
-- implementas features rapido
-- el codigo es directo (match sobre AST)
+En Moon:
+- `moon run` => interpreter
+- `moon vm` => bytecode compiler + VM
 
-Pero tiene limites:
-- cada ejecucion recorre el AST (mucho overhead)
-- los dispatches por nodo son caros
-- es mas dificil construir tooling (debugger/step) sobre AST
+Este capitulo describe el bytecode real del repo y como soportamos closures.
 
-La VM con bytecode:
-- ejecuta instrucciones compactas
-- separa "compilar" de "ejecutar"
-- prepara el terreno para optimizaciones futuras
+## 0) Componentes
 
-En Moon hoy tenemos ambos:
-- `moon run` -> interpreter
-- `moon vm` -> bytecode compiler + VM
-
-## Componentes
-
-### 1) Bytecode IR
-
+### Bytecode
 Crate:
 - `compiler/bytecode` (`moon_bytecode`)
 
@@ -32,8 +20,7 @@ Archivos:
 - `compiler/bytecode/src/module.rs`
 - `compiler/bytecode/src/compiler.rs`
 
-### 2) VM
-
+### VM
 Crate:
 - `compiler/vm` (`moon_vm`)
 
@@ -41,198 +28,188 @@ Archivos:
 - `compiler/vm/src/vm.rs`
 - `compiler/vm/src/error.rs`
 
-### 3) Runtime compartido
-
-La VM usa el mismo runtime que el interpreter:
+### Runtime compartido
 - `compiler/runtime` (`moon_runtime`)
 
-Esto permite:
-- mismo `Value`
-- mismo heap + GC
+## 1) Modelo de VM
 
-## Modelo: stack-based VM con entorno por scopes
-
-Esta VM es deliberadamente simple:
+VM stack-based:
 - operand stack: `Vec<Value>`
-- variables: HashMaps por scope (igual que interpreter)
-- frames: stack de `Frame` con `ip` (instruction pointer) y scopes
+- scopes por frame: `Vec<HashMap<String, Value>>`
+- frames: `Vec<Frame>`
 
-Esto no es la VM mas rapida posible, pero es excelente para aprender y para validar semantica.
+`Frame` (MVP+):
+- `func: FuncId`
+- `ip: usize`
+- `stack_base: usize` (para truncar stack al retornar)
+- `scopes: Vec<HashMap<String, Value>>`
+- `closure: Option<GcRef>` (environment capturado activo)
 
-## Instrucciones (Instr) + debug info (Span)
+Lookup de variables (lexical scoping):
+1) scopes locales (inner -> outer)
+2) closure env del frame (si existe)
+3) globals
+
+Si no existe variable, `LoadVar` cae a funcion top-level:
+- si `module.by_name` contiene el nombre, empuja `Value::Function(name)`.
+
+## 2) IR: Instr y spans
+
+En Moon, cada instruccion incluye debug info:
+- `Instr { kind: InstrKind, span: Span }`
+
+Eso permite:
+- `moon disasm` mostrar de que parte del source viene cada instruccion
+- la VM adjunta `span` en `VmError`
 
 Archivo:
 - `compiler/bytecode/src/instr.rs`
 
-En Moon, una instruccion de bytecode no es solo "que hacer", tambien incluye **de donde viene** en el source.
+## 3) Instrucciones (InstrKind)
 
-Por eso `Instr` es una struct:
-- `kind: InstrKind` (la instruccion en si)
-- `span: Span` (rango en bytes en el source que genero esa instruccion)
+Categorias:
 
-`InstrKind` es el enum con la lista de instrucciones.
-
-Categorias (InstrKind):
-
-1) Stack
+### 3.1 Stack
 - `Push(Value)`
 - `Pop`
 
-2) Scopes
+### 3.2 Scopes
 - `PushScope`
 - `PopScope`
 
-3) Variables
+### 3.3 Variables
 - `LoadVar(name)`
-- `DefineVar(name)`   // pop value, define en scope actual o globals
-- `SetVar(name)`      // pop value, asigna variable existente
+- `DefineVar(name)`
+- `SetVar(name)`
 
-4) Ops
+### 3.4 Ops
 - `Neg`, `Not`
 - `Add/Sub/Mul/Div/Mod`
 - `Eq/Ne/Lt/Le/Gt/Ge`
 
-5) Control flow
+### 3.5 Control flow
 - `Jump(ip)`
-- `JumpIfFalse(ip)`   // mira bool en top-of-stack, no lo poppea
-- `JumpIfTrue(ip)`
-
-6) Calls
-- `Call(FuncId, argc)`
-- `CallValue(argc)`        // indirect call: callee viene en stack como `Value::Function(...)`
+- `JumpIfFalse(ip)` / `JumpIfTrue(ip)`
 - `Return`
 
-7) Heap/aggregates
+### 3.6 Calls
+- `Call(FuncId, argc)` (directo, casi legacy)
+- `CallValue(argc)` (indirecto; callee viene en stack)
+
+### 3.7 Closures
+- `MakeClosure(func_name, captures)`
+
+`MakeClosure`:
+- crea `Value::Closure(handle)`
+- captura locals visibles (por nombre)
+
+### 3.8 Heap
 - `MakeArray(n)`
 - `MakeObject(keys)`
-- `IndexGet`
-- `IndexSet`
+- `IndexGet` / `IndexSet`
 
-## Module y Function
+## 4) Module
 
 Archivo:
 - `compiler/bytecode/src/module.rs`
 
-`Module` contiene:
+`Module`:
 - `functions: Vec<Function>`
 - `by_name: HashMap<String, FuncId>`
 - `main: FuncId`
 
-`Function` contiene:
-- `name`
-- `params`
+`Function`:
+- `name: String`
+- `params: Vec<String>`
 - `code: Vec<Instr>`
 
 Nota:
-- `gc` es un builtin y se inserta como Function en el Module.
+- las funciones anonimas (`Expr::Fn`) se compilan como funciones con nombres sinteticos `<lambda#N>`.
 
-## Compiler: AST -> bytecode
+## 5) Compiler: lowering AST -> bytecode
 
 Archivo:
 - `compiler/bytecode/src/compiler.rs`
 
 Estrategia:
+- un `Compiler` mantiene:
+  - `functions` y `by_name`
+  - un contador para `<lambda#N>`
+- para cada contexto de funcion, usamos `FunctionCtx`:
+  - `scopes` (nombres de locals por scope)
+  - `closure_env` (nombres accesibles via env capturado)
 
-1) Reservar `main` en el modulo.
-2) Insertar builtins (por ahora `gc`).
-3) Pre-colectar ids de funciones:
-   - asi resolvemos calls aunque la funcion se defina despues
-4) Compilar cada funcion a su propio `Vec<Instr>`.
-5) Compilar `main`:
-   - statements en orden
-   - tail expr (o `Unit`)
-   - `Return`
+### 5.1 Por que trackear scopes en el compilador
 
-### Patching de jumps
+Para closures necesitamos saber "que nombres estan visibles ahora".
 
-En bytecode no sabemos el `ip` final de un `if` hasta compilar ramas.
-Solucion:
-- emitir `JumpIfFalse(placeholder)`
-- compilar then
-- emitir `Jump(placeholder)`
-- patch el primer jump al inicio del else
-- compilar else
-- patch el segundo jump al final
+Al ver `Expr::Fn`:
+- calculamos `captures = ctx.visible_names()`
+- generamos un `Function` nuevo para el body
+- emitimos `MakeClosure(name, captures)`
 
-Esto esta en `patch_jump(...)`.
+Semantica:
+- captura por valor (snapshot) de locals
+- globals no se capturan
 
-### Short-circuit de && y ||
+### 5.2 Blocks y scopes
 
-El bytecode preserva semantica de corto circuito:
+Cuando compilamos `Expr::Block`:
+- emitimos `PushScope`
+- `ctx.push_scope()`
+- compilamos statements
+- compilamos tail
+- `ctx.pop_scope()`
+- emitimos `PopScope`
 
-- `a && b`
-  - evalua `a`
-  - si es false, salta al final dejando `a` en el stack como resultado
-  - si es true, lo poppea y evalua `b`
+Esto alinea:
+- scoping del AST
+- scoping de la VM
+- scoping del tracker de captura
 
-- `a || b`
-  - evalua `a`
-  - si es true, salta al final dejando `a` en el stack como resultado
-  - si es false, lo poppea y evalua `b`
+## 6) VM: ejecucion de closures
 
-## VM: ejecucion
+### 6.1 `MakeClosure`
 
-Archivo:
-- `compiler/vm/src/vm.rs`
+La VM:
+- para cada nombre en `captures`:
+  - busca en locals o closure env del frame (NO globals)
+  - si existe, lo copia al env capturado
+- alloc en heap:
+  - `heap.alloc_closure(func_name, env)`
+- empuja `Value::Closure(handle)`
 
-### Frame
+### 6.2 `CallValue`
 
-Cada call crea un Frame:
-- `func: FuncId`
-- `ip`
-- `stack_base` (donde truncar el stack al retornar)
-- `scopes: Vec<HashMap<String, Value>>`
+`CallValue(argc)`:
+- pop args
+- pop callee
+- si callee es:
+  - `Value::Function(name)` => call con `closure=None`
+  - `Value::Closure(h)` => call con `closure=Some(h)` y `func_name` sacado del heap
 
-### Globals vs locals (detalle importante)
+Eso fija lexical scoping:
+- una closure ve su env capturado, no el caller.
 
-Regla que queremos (igual que interpreter):
-- top-level `let` define globals
-- las funciones ven globals, pero no ven scopes del caller
+## 7) Practica: mira el bytecode
 
-Implementacion:
-- el frame de `main` empieza con `scopes = []` (vacio)
-  - por eso `DefineVar` en main va a globals
-- al llamar funcion, se crea frame con `scopes = [params_scope]`
+Ejemplo:
 
-### Builtin gc()
+```moon
+let c = { let x = 0; fn() -> Int { x = x + 1; x } };
+c() + c()
+```
 
-La VM intercepta calls a una Function cuyo `name == "gc"`:
-- junta roots (globals + scopes de frames + operand stack)
-- corre `heap.collect_garbage(roots)`
-- empuja `Unit` como retorno
+Usa:
+- `cargo run -- disasm <file>`
 
-## Disassembler: `moon disasm`
+Busca:
+- `MakeClosure <lambda#...>`
+- `CallValue argc=0`
+- `SetVar x` que actualiza el env capturado
 
-Ahora que el bytecode incluye `span` por instruccion, podemos imprimir el modulo y ver "que genero" el compiler.
+## 8) Ejercicios
 
-Comando:
-- `moon disasm <file>`
-
-Pipeline:
-- load -> lex -> parse -> typecheck -> compile(bytecode) -> print
-
-El output muestra por funcion:
-- `ip` (instruction pointer)
-- `InstrKind` (la instruccion)
-- `@line:col [start..end]` (origen aproximado en el source)
-
-Archivo:
-- `src/main.rs` (cmd `disasm`)
-
-## Tests: VM vs interpreter
-
-Archivo:
-- `compiler/vm/tests/vm.rs`
-
-Estos tests validan:
-- que la VM respeta semantica del lenguaje
-- que el bytecode compiler esta generando instrucciones correctas
-
-Un buen criterio a futuro:
-- cualquier feature nueva deberia tener test en interpreter y VM
-
-## Mini ejercicios
-
-1) Mejora `moon disasm` para imprimir un snippet por instruccion usando `Source::render_span`.
-2) Agrega "stacktrace" basico en `VmError` (lista de funciones activas).
-3) Cambia variables de HashMap a slots (indices) para performance.
+1) Implementa slots de variables (`LoadLocal(slot)`), elimina HashMaps.
+2) Implementa upvalues por referencia (captura por referencia, no snapshot).
+3) Agrega debug stepping (ejecutar una instruccion por vez) usando spans.

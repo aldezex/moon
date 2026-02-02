@@ -1,27 +1,26 @@
 # 04 - Lexer (tokenizer)
 
-## Que hace el lexer
-
-El lexer transforma texto crudo en una secuencia de tokens:
+El lexer convierte texto en tokens:
 
 ```
 source text -> [Token { kind, span }, ... , Eof]
 ```
 
-La idea es separar responsabilidades:
-- el lexer entiende caracteres y "palabras"
-- el parser entiende estructura (expresiones, bloques, statements)
+Un lexer bueno:
+- es determinista
+- es total: no paniquea con input arbitrario
+- produce spans correctos
 
 Archivo:
 - `compiler/core/src/lexer/mod.rs`
 
-## Token y TokenKind
+## 0) Modelo: Token y TokenKind
 
 `Token`:
 - `kind: TokenKind`
-- `span: Span` (rango en bytes dentro del source)
+- `span: Span` (rangos en bytes dentro del source)
 
-`TokenKind` (MVP actual) incluye:
+`TokenKind` (resumen):
 
 Literals:
 - `Int(i64)`
@@ -29,85 +28,110 @@ Literals:
 - `Ident(String)`
 
 Keywords:
-- `let`
-- `fn`
-- `return`
-- `if`
-- `else`
-- `true`
-- `false`
+- `let`, `fn`, `return`
+- `if`, `else`
+- `true`, `false`
 
-Operadores / puntuacion:
-- aritmetica: `+ - * / %`
-- booleanos: `! && ||`
-- comparacion: `< <= > >=`
-- igualdad: `== !=`
-- asignacion (solo para statements): `=`
-- tipos:
-  - `:` (anotacion)
-  - `->` (return type)
-  - `<` `>` (usado en tipos genericos, ej: `Array<Int>`)
-- delimitadores:
-  - `(` `)` (calls y grouping)
-  - `{` `}` (blocks)
-  - `[` `]` (arrays + indexing)
-  - `,` (listas y props)
-  - `;` (expr statement)
+Puntuacion / operadores:
+- `(` `)` `{` `}` `[` `]`
+- `,` `;` `:`
+- `=`
+- `->`
+- `+ - * / %`
+- `! && ||`
+- `== != < <= > >=`
 - `#` (object literal: `#{ ... }`)
 
-Siempre terminamos con:
+Fin:
 - `Eof`
 
-## Algoritmo (alto nivel)
+## 1) Diseno: bytes + ASCII first
 
-Implementacion MVP: un loop con un cursor `i` sobre bytes.
+El lexer opera sobre `source.text.as_bytes()`.
 
-1) Whitespace
-   - se ignora (`space/tab/newline`)
+Decisiones MVP:
+- Identificadores ASCII: `[A-Za-z_][A-Za-z0-9_]*`
+- Strings delimitadas por `"..."` con escapes basicos
 
-2) Comentarios
-   - `// ...` hasta fin de linea
+Esto simplifica:
+- spans (bytes)
+- performance
+- predictibilidad
 
-3) Identificadores / keywords
-   - `[_A-Za-z][_A-Za-z0-9]*`
-   - si coincide con una keyword, produce ese token
+A futuro:
+- identifiers unicode (requiere decidir normalizacion)
+- strings con escapes mas completos
 
-4) Numeros
-   - por ahora solo ints decimales: `[0-9]+`
+## 2) Algoritmo (loop + cursor)
 
-5) Strings
-   - `" ... "`
-   - escapes MVP: `\\n`, `\\t`, `\\"`, `\\\\`
+Estrategia tipica:
+- un cursor `i` sobre bytes
+- inspeccionas el byte actual
+- consumes 1+ bytes segun categoria
 
-6) Operadores/puntuacion
-   - tokens de 1 o 2 caracteres
-   - casos de 2 chars importantes:
-     - `==`, `!=`, `<=`, `>=`, `&&`, `||`, `->`
+Orden recomendado:
+1) whitespace
+2) comentarios (`// ...`)
+3) identifiers/keywords
+4) numeros
+5) strings
+6) operadores de 2 chars (mirando lookahead)
+7) operadores de 1 char
 
-## Errores del lexer
+El orden importa:
+- `==` debe ganar sobre `=`
+- `->` debe ganar sobre `-`
 
-Cuando algo no cuadra, el lexer devuelve:
+## 3) Keywords vs Ident
+
+Regla:
+- escaneas un "word" como ident
+- luego chequeas si esta en tabla de keywords
+
+Eso permite que:
+- `fn` sea keyword
+- `foo` sea ident
+
+Importante para el parser:
+- `fn name(...)` (declaracion)
+- `fn(...)` (expresion anonima)
+
+La distincion final (stmt vs expr) NO la hace el lexer.
+
+## 4) Strings y escapes
+
+Strings:
+- empiezan y terminan en `"`
+- spans cubren todo el literal
+
+Escapes MVP:
+- `\n`, `\t`, `\"`, `\\`
+
+Errores comunes:
+- string sin cerrar
+- escape desconocido
+
+## 5) Errores (LexError)
+
+Cuando algo no cuadra, devolvemos:
 - `LexError { message, span }`
 
 Ejemplos:
 - caracter inesperado
+- int overflow
 - string sin cerrar
-- escape desconocido
-- numero invalido (overflow de i64)
 
-La CLI imprime el error usando:
-- `Source::render_span(error.span, ...)`
+La CLI renderiza usando `Source::render_span`.
 
-## Tips de debugging
+## 6) Tests y debugging
 
-Cuando el parser falla, muchas veces conviene:
-1) agregar un comando CLI o log para imprimir tokens
-2) verificar que el lexer no este "comiéndose" caracteres por error
+Si el parser falla, muchas veces el bug esta en tokens.
 
-Un truco: cuando agregas un token nuevo, crea un test pequeno que solo haga lexing.
+Estrategia:
+- agrega un test que solo corra lexer
+- imprime tokens en un debug command (si hace falta)
 
-## Mini ejercicios
-
-1) Agrega soporte para comentarios de bloque `/* ... */`.
-2) Soporta `_` en numeros: `1_000_000`.
-3) Soporta escapes hex: `\\xNN`.
+Ejercicios:
+1) soporta `_` en numeros (`1_000_000`)
+2) agrega comentarios `/* ... */`
+3) agrega escapes hex `\xNN`

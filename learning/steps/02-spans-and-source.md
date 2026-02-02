@@ -1,113 +1,124 @@
-# 02 - Spans y diagnosticos (Source)
+# 02 - Spans y Source (diagnosticos con ubicacion)
 
-## Por que importan los spans
+Un lenguaje usable no es solo semantica: es diagnostico.
+Este capitulo define como representamos ubicaciones en el source y como las convertimos a:
+- line/col para CLI
+- ranges UTF-16 para LSP
 
-Cuando haces un lenguaje, el usuario tolera "errores", pero no tolera:
-- errores sin ubicacion
-- mensajes vagos
-- no saber que parte del codigo esta mal
+## 0) Definicion: Span
 
-La diferencia entre "toy language" y "lenguaje usable" suele ser:
-- diagnosticos buenos desde el dia 1
+En Moon, un `Span` es un rango **en bytes** dentro del `source.text`:
 
-Por eso, desde el MVP, Moon usa **Span** en todos lados:
-- cada token del lexer
-- cada nodo del AST
-- cada error (lex/parse/type/runtime/compile)
-
-Un Span es un rango `[start, end)` dentro del texto original.
-
-## Span (rango en bytes)
+- `Span { start: usize, end: usize }`
+- `start` inclusive, `end` exclusive (convencion estandar)
 
 Archivo:
 - `compiler/core/src/span.rs`
 
-`Span`:
-- `start: usize`
-- `end: usize`
+Por que bytes y no (line, col)?
+- el lexer y parser operan sobre offsets
+- merge/union de spans es trivial
+- evita ambiguedades con Unicode (codepoints vs graphemes)
+- es barato (dos `usize`)
 
-Importante: son offsets en **bytes**, no en "caracteres".
+Operacion fundamental:
+- `Span::merge(a, b)` produce el rango minimo que contiene ambos
 
-Por que bytes:
-- Rust usa UTF-8 en `String`.
-- Indexar por "char index" es mas caro y mas ambiguo.
-- Para tooling (LSP, resaltado, etc.) lo que importa es un rango en el buffer real.
+Eso permite que nodos AST grandes (ej: un `if`) tengan un span que cubre toda la expresion.
 
-Operacion clave:
-- `Span::merge(a, b)`: produce un Span que cubre ambos.
-  - lo usamos cuando construimos nodos compuestos:
-    - `a + b` cubre desde el inicio de `a` hasta el fin de `b`
+## 1) Source: path + text + rendering
 
-## Source: path + text + render_span
+`Source` es el wrapper que usamos para:
+- cargar archivos
+- mapear offsets a line/col
+- renderizar un span como "error con snippet"
 
 Archivo:
 - `compiler/core/src/source.rs`
 
-`Source` encapsula:
-- `path`: para mensajes (`examples/hello.moon` o `<stdin>`)
-- `text`: el contenido
+API relevante:
+- `Source::from_path(path) -> Source`
+- `Source::line_col(offset) -> (line, col)` (1-based)
+- `Source::render_span(span, message) -> String`
 
-### line_col(offset)
+Nota tecnica:
+- `line_col` actual es O(n) en el offset (itera bytes)
+- para un MVP esta bien; a futuro se puede indexar line starts para O(log n)
 
-`line_col` convierte `offset` (bytes) a:
-- `(line, col)` 1-based
+## 2) Render de errores (CLI)
 
-Hoy es un scan lineal por el texto, suficiente para MVP.
-A futuro se puede optimizar con un indice de line starts (vector de offsets).
+`render_span`:
+- calcula la linea del error
+- imprime:
+  - `path:line:col: message`
+  - la linea de texto
+  - un caret `^^^^` con longitud `max(1, end-start)`
 
-### render_span(span, message)
+Tradeoff:
+- el caret usa offsets en bytes; si hay Unicode multibyte puede "desalinearse" visualmente.
+- esto se resuelve con un renderer unicode-aware (futuro).
 
-`render_span` crea un diagnostico tipo:
+## 3) Spans en el AST
 
+Regla de diseno:
+- si el usuario escribio algo, el nodo debe tener span.
+
+Ejemplos:
+- `Expr::Int(_, Span)`
+- `Stmt::Let { span, .. }`
+
+Esto permite:
+- errores del parser/typechecker con ubicacion
+- debug info en bytecode (ip -> span)
+
+## 4) LSP y UTF-16 (por que hay que convertir)
+
+LSP define `Position { line, character }` donde:
+- `line` es 0-based
+- `character` es "UTF-16 code units" (no bytes)
+
+Esto es un clasico punto de friccion:
+- Rust `String` indexa por bytes
+- LSP usa UTF-16 para compatibilidad historica (VSCode/TS)
+
+Implementacion en Moon:
+- `compiler/lsp/src/main.rs`
+  - `position_from_offset_utf16(text, offset) -> Position`
+  - `offset_from_position_utf16(text, position) -> usize`
+  - `range_from_span_utf16(text, span) -> Range`
+
+Tambien hay tests unitarios:
+- `utf16_position_roundtrip_ascii`
+- `utf16_position_handles_surrogate_pairs`
+
+Eso asegura:
+- offsets <-> positions son consistentes
+- emojis (surrogate pairs) no rompen ranges
+
+## 5) Practica: follow the span
+
+Toma este programa:
+
+```moon
+let f = { let x = 10; fn(y: Int) -> Int { x + y } };
+f(1)
 ```
-file.moon:3:15: parse error: expected ';'
-let x = 1 + 2
-              ^
-```
 
-Como lo hace:
-1) calcula `line/col` del inicio del span
-2) extrae el texto de la linea actual
-3) imprime carets `^` desde `span.start` por `len = max(1, span.end - span.start)`
+- El lexer asigna spans a tokens.
+- El parser construye:
+  - un `Stmt::Let` cuyo span cubre desde `let` hasta `;`
+  - un `Expr::Fn` con span desde `fn` hasta `}`
+- El typechecker si falla, reporta spans del nodo problematico.
+- El bytecode compiler asigna a cada `Instr` el span del AST que la genero.
+- La VM pega `span` en errores de runtime.
 
-Limitaciones del MVP:
-- si el span cruza multiples lineas, solo mostramos la linea del inicio
-- tabs se imprimen como `\t` pero el caret puede "desalinearse"
+Ejercicio:
+- fuerza un error y mira el span:
+  - `let x: Int = true;`
+  - `if 1 { 0 } else { 1 }`
 
-Eso esta bien para arrancar; lo importante es tener el hook (Span) para mejorar.
+## 6) Ejercicios (para reforzar)
 
-## Errores y spans (frontend)
-
-Archivo:
-- `compiler/core/src/error.rs`
-
-En el frontend:
-- `LexError { message, span }`
-- `ParseError { message, span }`
-
-La CLI imprime:
-- `source.render_span(error.span, "...")`
-
-En el resto del pipeline:
-- typechecker: `compiler/typechecker/src/error.rs`
-- interpreter: `compiler/interpreter/src/error.rs`
-- bytecode compiler: `compiler/bytecode/src/compiler.rs` (CompileError)
-
-## Buenas practicas al propagar spans
-
-1) El lexer debe marcar lo mas "atomicamente" posible
-   - ej: `==` tiene su span exacto
-
-2) El parser debe:
-   - asignar spans a nodos
-   - y usar `merge` para construir spans de expresiones mas grandes
-
-3) Los errores deben apuntar al token o nodo que "explica" el error
-   - ej: "undefined variable x" -> span de `x`
-   - ej: "expected ';'" -> span de la expresion que necesita `;`
-
-## Mini ejercicios
-
-1) Mejora `render_span` para spans multi-line.
-2) Agrega una cache de line starts para que `line_col` sea O(log N) o O(1).
-3) Agrega un prefijo con la linea (tipo `  3 | let x = ...`).
+1) Optimiza `Source::line_col` precalculando indices de line starts.
+2) Implementa un renderer unicode-aware (alinear caret por grapheme clusters).
+3) Agrega una funcion helper `Span::len()` y usa `max(1, len)` donde sea necesario.

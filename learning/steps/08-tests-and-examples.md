@@ -1,92 +1,95 @@
-# 08 - Tests y ejemplos (como validar el lenguaje)
+# 08 - Tests y ejemplos (calidad y regresiones)
 
-## Por que tests desde el MVP
+Un lenguaje sin tests se rompe silenciosamente.
+Este capitulo describe como testeamos Moon y por que.
 
-En un lenguaje, un cambio pequeno puede romper cosas muy lejos:
-- cambiar precedencia rompe cientos de programas
-- cambiar scoping rompe funciones/blocks
-- cambiar Value rompe interpreter y VM
+## 0) Objetivo
 
-Por eso:
-- tests unitarios del frontend
-- tests de pipeline (lex -> parse -> eval)
-- tests de VM (lex -> parse -> typecheck -> compile -> run)
+- Capturar semantica como contratos
+- Evitar divergencia entre interpreter y VM
+- Hacer facil agregar features sin miedo
 
-La meta no es tener "muchos tests", sino tests que cubran:
-- reglas fundamentales
-- casos borde
-- regressions tipicas
+## 1) Donde estan los tests
 
-## Ejemplos
-
-Carpeta:
-- `examples/`
-
-Ejemplo actual:
-- `examples/hello.moon`
-
-Tip: manten los examples chicos, pero representativos. Un ejemplo por feature nueva ayuda muchisimo a onboarding.
-
-## Tests del interpreter
-
-Archivo:
+### 1.1 Interpreter
 - `compiler/interpreter/tests/mvp.rs`
 
-Que cubre:
-- precedencia aritmetica y logica
-- tail expression
-- blocks + scopes
-- if/else
-- funciones + call-before-definition
-- arrays/objects + indexing + assignment
+Tests de semantica directa:
+- precedencias
+- bloques + scopes
+- funciones/closures
+- arrays/objects
+- `return`
 
-Patron de test:
-1) crear `Source` desde string
-2) `lex` -> `parse` -> `eval_program`
-3) assert del `Value`
-
-## Tests del typechecker
-
-Archivo:
+### 1.2 Typechecker
 - `compiler/typechecker/tests/typechecker.rs`
 
-Que cubre:
-- inferencia basica en lets
-- anotaciones correctas vs mismatch
-- reglas de `if` (cond Bool, ramas mismo tipo)
-- llamadas a funciones (aridad + tipos)
-- arrays/objects:
-  - inferencia
-  - `[]`/`#{}` vacios requieren anotacion
-  - indexing y assignment
+Tests de errores y reglas:
+- mismatches
+- llamadas
+- `return` y `Never`
+- closures y `Expr::Fn`
 
-Tip:
-- los tests de typechecker deberian assert sobre `message` (no sobre formato exacto del diagnostico) para permitir mejorar mensajes sin romper tests.
-
-## Tests de la VM (bytecode)
-
-Archivo:
+### 1.3 VM
 - `compiler/vm/tests/vm.rs`
 
-Pipeline:
-- `lex -> parse -> typecheck -> compile -> vm.run`
+Tests del pipeline:
+- parse + typecheck + compile + run
+- asegura que bytecode/VM coincide con semantica del interpreter
 
-Estos tests son cruciales para:
-- verificar que compiler+VM preservan semantica del interpreter
-- detectar bugs de stack discipline (Pop, Return, etc.)
+## 2) Filosofia: contratos, no outputs
 
-## Ideas para mejorar tests
+Preferimos tests de semantica:
+- "este programa devuelve 42"
+- "este programa debe fallar con error que contiene X"
 
-1) "Golden tests" de diagnosticos:
-   - snapshot de `render_span` para algunos errores comunes
+Evita tests fragiles:
+- snapshots de AST/bytecode son utiles, pero cambian facil
 
-2) Property-based tests (a futuro):
-   - generar expresiones random y comparar:
-     - interpreter vs VM (deben dar mismo valor)
+## 3) Consistencia interpreter vs VM
 
-3) Tests por feature:
-   - cada PR que agrega sintaxis nueva deberia traer:
-     - parser tests (AST shape)
-     - typechecker tests
-     - interpreter tests
-     - VM tests (si aplica)
+Regla:
+- cada feature de lenguaje debe tener al menos:
+  - 1 test en interpreter
+  - 1 test en VM
+
+Ejemplos actuales:
+- closures:
+  - `anonymous_functions_work`
+  - `closures_capture_lexical_variables`
+  - `closures_can_mutate_captured_state`
+
+Esto evita que:
+- el parser cambie y rompa solo un backend
+- la VM tenga orden de evaluacion distinto
+
+## 4) Tests de errores (mensajes)
+
+Los tests no comparan el error completo (fragil).
+Comparan substrings:
+- `assert!(err.contains("type mismatch"))`
+
+Eso mantiene:
+- flexibilidad de mensajes
+- pero asegura categoria de error
+
+## 5) Ideas avanzadas (cuando el lenguaje crezca)
+
+### 5.1 Golden tests
+- input `.moon` -> output esperado
+- ideal para `moon run` y `moon vm`
+
+### 5.2 Differential testing
+- correr el mismo programa en ambos backends
+- comparar valores finales
+
+### 5.3 Fuzzing
+- fuzz del lexer/parser:
+  - no panics
+  - spans validos
+
+## 6) Ejercicios
+
+1) Agrega un helper que corra el mismo snippet en interpreter y VM y compare `Value`.
+2) Crea un directorio `tests/golden/` con programas y outputs.
+3) Agrega tests para unicode en strings (y mira spans).
