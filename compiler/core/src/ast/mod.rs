@@ -25,6 +25,10 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    Return {
+        expr: Option<Expr>,
+        span: Span,
+    },
     Fn {
         name: String,
         params: Vec<Param>,
@@ -43,6 +47,7 @@ impl Stmt {
         match self {
             Stmt::Let { span, .. } => *span,
             Stmt::Assign { span, .. } => *span,
+            Stmt::Return { span, .. } => *span,
             Stmt::Fn { span, .. } => *span,
             Stmt::Expr { span, .. } => *span,
         }

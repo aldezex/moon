@@ -31,6 +31,7 @@ Literals:
 Keywords:
 - `let`
 - `fn`
+- `return`
 - `if`
 - `else`
 - `true`

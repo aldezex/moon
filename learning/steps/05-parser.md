@@ -22,9 +22,10 @@ Program  := Seq(terminator = EOF)
 
 Seq(T)   := (Stmt)* (Expr)?   // Expr solo si viene justo antes del terminador
 
-Stmt     := LetStmt | FnStmt | AssignStmt | ExprStmt
+Stmt     := LetStmt | FnStmt | ReturnStmt | AssignStmt | ExprStmt
 LetStmt  := "let" Ident (":" Type)? "=" Expr ";"
 FnStmt   := "fn" Ident "(" Params? ")" "->" Type Block
+ReturnStmt := "return" Expr? ";"
 AssignStmt := Expr "=" Expr ";"     // pero Expr debe ser lvalue (Ident o Index)
 ExprStmt := Expr ";"
 
@@ -53,7 +54,7 @@ Notas importantes:
 
 La funcion clave es `parse_sequence(terminator)`:
 - itera tokens hasta ver el terminador (`EOF` o `}`)
-- parsea statements (`let`, `fn`) cuando corresponden
+- parsea statements (`let`, `fn`, `return`) cuando corresponden
 - si encuentra una expresion:
   - si termina en `;` -> `Stmt::Expr`
   - si le sigue `=` -> `Stmt::Assign`
@@ -124,6 +125,7 @@ Ejemplos:
 - falta `}` para cerrar block
 - `fn` dentro de block (restriccion MVP)
 - assignment con target invalido (`(x) = 1;`)
+- `return` sin `;`
 
 La CLI lo imprime via `Source::render_span`.
 

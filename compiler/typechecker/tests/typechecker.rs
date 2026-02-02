@@ -87,3 +87,21 @@ fn rejects_assignment_type_mismatch() {
     let err = check("let x: Int = 1; x = true; x").unwrap_err();
     assert!(err.contains("type mismatch"));
 }
+
+#[test]
+fn rejects_return_outside_function() {
+    let err = check("return 1; 0").unwrap_err();
+    assert!(err.contains("return"));
+}
+
+#[test]
+fn rejects_return_type_mismatch() {
+    let err = check("fn f() -> Int { return true; } 0").unwrap_err();
+    assert!(err.contains("type mismatch"));
+}
+
+#[test]
+fn allows_function_with_only_return_statement() {
+    let ty = check("fn f() -> Int { return 1; } f()").unwrap();
+    assert_eq!(ty, Type::Int);
+}

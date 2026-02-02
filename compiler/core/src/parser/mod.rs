@@ -63,6 +63,29 @@ impl Parser {
         })
     }
 
+    fn parse_return_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let ret_tok = self.expect(|k| matches!(k, TokenKind::Return), "expected 'return'")?;
+
+        // `return;`
+        if let Some(semi) = self.maybe(|k| matches!(k, TokenKind::Semicolon)) {
+            let span = ret_tok.span.merge(semi.span);
+            return Ok(Stmt::Return { expr: None, span });
+        }
+
+        // `return <expr>;`
+        let expr = self.parse_expr(0)?;
+        let semi = self.expect(
+            |k| matches!(k, TokenKind::Semicolon),
+            "expected ';' after return",
+        )?;
+
+        let span = ret_tok.span.merge(semi.span);
+        Ok(Stmt::Return {
+            expr: Some(expr),
+            span,
+        })
+    }
+
     fn parse_fn_stmt(&mut self) -> Result<Stmt, ParseError> {
         let fn_tok = self.expect(|k| matches!(k, TokenKind::Fn), "expected 'fn'")?;
 
@@ -382,6 +405,10 @@ impl Parser {
             match &self.peek().kind {
                 TokenKind::Let => {
                     stmts.push(self.parse_let_stmt()?);
+                    continue;
+                }
+                TokenKind::Return => {
+                    stmts.push(self.parse_return_stmt()?);
                     continue;
                 }
                 TokenKind::Fn => {

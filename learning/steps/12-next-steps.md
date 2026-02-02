@@ -13,6 +13,7 @@ Ya esta implementado y documentado:
 - Bloques + scopes + tail expression: `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`
 - `if/else` como expresion: `learning/steps/05-parser.md`, `learning/steps/09-typechecker.md`
 - Funciones top-level + llamadas por nombre: `learning/steps/03-ast.md`, `learning/steps/05-parser.md`
+- `return expr?;` como statement dentro de funciones (early exit): `learning/steps/05-parser.md`, `learning/steps/06-interpreter.md`, `learning/steps/09-typechecker.md`
 - Typechecking estricto: `learning/steps/09-typechecker.md`
 - Runtime con heap + GC mark/sweep (arrays/objects): `learning/steps/10-runtime-and-gc.md`
 - Bytecode + VM: `learning/steps/11-bytecode-and-vm.md`
@@ -73,10 +74,38 @@ Archivos que probablemente cambian:
 ## 2) Control flow: `return`, loops, break/continue
 
 Hoy todo es "expresion" y la salida de una funcion depende del tail expression del block.
-Eso funciona, pero en la practica querremos:
-- `return expr;` para early exits claros
-- loops (`while`, `loop`, quizas `for`)
-- `break` / `continue`
+Eso funciona, pero en la practica queremos control flow explicito.
+
+Estado:
+- `return expr?;` implementado (early exit claro).
+- loops (`while`, `loop`, quizas `for`) pendiente.
+- `break` / `continue` pendiente.
+
+### `return`: diseno y decisiones (lo que hicimos)
+
+Sintaxis:
+- `return expr?;`
+  - `return;` devuelve `Unit`
+
+Reglas:
+- `return` solo se permite dentro de funciones (lo valida el typechecker).
+- Si un `return` "escapa" al top-level, es error (guardrail en interpreter).
+
+Implementacion (patron reusable para loops):
+- Typechecker:
+  - agregamos `Type::Never` para modelar "diverge" (un bloque/rama que no produce valor).
+  - regla clave: `Never` es compatible con cualquier tipo esperado.
+- Interpreter:
+  - `eval_*` propaga `Return(value)` hacia arriba hasta que el handler de llamadas lo consume.
+- Bytecode/VM:
+  - el bytecode ya tenia `Instr::Return`; ahora compila `Stmt::Return` a `Return` (con span del statement).
+
+Archivos clave:
+- `compiler/core/src/ast/mod.rs`
+- `compiler/core/src/parser/mod.rs`
+- `compiler/typechecker/src/lib.rs`
+- `compiler/interpreter/src/eval.rs`
+- `compiler/bytecode/src/compiler.rs`
 
 ### Como se implementa sin volverse loco
 
@@ -209,10 +238,11 @@ Si tenemos que elegir un siguiente paso "con mejor ROI":
 
 Ya completamos:
 - spans en VM/bytecode + `moon disasm`
+- `return expr?;` (early exit dentro de funciones)
 
 Siguiente trio con mejor impacto:
-1) `return` (muy util, poco trabajo si se hace bien)
-2) funciones como valores (sin captures) y luego closures
+1) funciones como valores (sin captures) y luego closures
+2) loops (`while`/`loop`) + `break`/`continue`
 3) performance: variables por slots (cuando empiece a doler)
 
 Cada uno de esos pasos mejora:

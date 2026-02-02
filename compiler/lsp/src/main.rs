@@ -421,7 +421,7 @@ fn static_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
     // Keywords.
-    for kw in ["let", "fn", "if", "else", "true", "false"] {
+    for kw in ["let", "fn", "return", "if", "else", "true", "false"] {
         items.push(CompletionItem {
             label: kw.to_string(),
             kind: Some(K::KEYWORD),

@@ -10,6 +10,7 @@ pub enum TokenKind {
     // Keywords
     Let,
     Fn,
+    Return,
     If,
     Else,
     True,
@@ -87,6 +88,7 @@ pub fn lex(input: &str) -> Result<Vec<Token>, LexError> {
             let kind = match text {
                 "let" => TokenKind::Let,
                 "fn" => TokenKind::Fn,
+                "return" => TokenKind::Return,
                 "if" => TokenKind::If,
                 "else" => TokenKind::Else,
                 "true" => TokenKind::True,

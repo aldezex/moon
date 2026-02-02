@@ -52,11 +52,19 @@ Hoy:
      - un identificador (`x`)
      - un index (`arr[0]`, `obj["k"]`)
 
-3) `Fn` (declaracion de funcion, top-level)
+3) `Return`
+   - `return expr?;`
+   - `expr` es opcional (`return;` devuelve `Unit`)
+   - semantica: solo permitido dentro de funciones (lo valida el typechecker)
+   - modelado como:
+     - `expr: Option<Expr>`
+     - `span: Span`
+
+4) `Fn` (declaracion de funcion, top-level)
    - `fn name(params...) -> Type { ... }`
    - el body es un `Expr` (normalmente un Block)
 
-4) `Expr` (expression statement)
+5) `Expr` (expression statement)
    - `expr;`
    - se evalua y se descarta
 

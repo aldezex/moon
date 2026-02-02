@@ -126,6 +126,13 @@ fn compile_stmts(
                     })
                 }
             },
+            Stmt::Return { expr, span } => {
+                match expr {
+                    Some(expr) => compile_expr(expr, code, funcs)?,
+                    None => emit(code, InstrKind::Push(Value::Unit), *span),
+                }
+                emit(code, InstrKind::Return, *span);
+            }
             Stmt::Fn { .. } => {
                 // Functions are top-level items. They don't execute in main.
             }

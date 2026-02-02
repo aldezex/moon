@@ -4,6 +4,7 @@ pub enum Type {
     Bool,
     String,
     Unit,
+    Never,
     Array(Box<Type>),
     Object(Box<Type>),
     Function { params: Vec<Type>, ret: Box<Type> },
@@ -16,6 +17,7 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
             Type::Unit => write!(f, "Unit"),
+            Type::Never => write!(f, "Never"),
             Type::Array(inner) => write!(f, "Array<{inner}>"),
             Type::Object(inner) => write!(f, "Object<{inner}>"),
             Type::Function { params, ret } => {

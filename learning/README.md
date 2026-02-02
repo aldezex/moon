@@ -68,6 +68,7 @@ Soportamos:
 - Bloques `{ ... }` con scopes y **tail expression** (la ultima expresion sin `;` es el valor del bloque)
 - `if cond { ... } else { ... }` como expresion
 - `fn name(params...) -> Type { ... }` + llamadas `name(args...)`
+- `return expr?;` dentro de funciones (early exit; `return;` devuelve `Unit`)
 - Literales:
   - `Int`, `Bool`, `String`
   - Arrays: `[a, b, c]`

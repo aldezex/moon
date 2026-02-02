@@ -44,6 +44,7 @@ Soportamos:
 - `Bool`
 - `String`
 - `Unit`
+- `Never` (interno: "esta expresion no produce valor", ej: por `return`)
 - `Array<T>`
 - `Object<T>` (map String -> T)
 
@@ -123,7 +124,12 @@ Se procesan:
 3) `expr;`
    - se typecheckea y se descarta
 
-4) `fn ...`
+4) `return expr?;`
+   - solo permitido dentro de funciones
+   - el tipo de `expr` (o `Unit` si no hay expr) debe ser compatible con el return type declarado
+   - una vez que aparece un `return`, todo el block se considera "divergente" (tipo `Never`)
+
+5) `fn ...`
    - el cuerpo se typecheckea en un scope nuevo con los parametros
    - el tipo del cuerpo debe igualar el return type
 
@@ -149,6 +155,7 @@ If:
 - `cond` debe ser Bool
 - `then` y `else` deben tener el mismo tipo
 - el tipo del `if` es el tipo comun
+  - caso especial: si una rama es `Never` (por ejemplo termina en `return`), el tipo del `if` es el de la otra rama
 
 Array literal:
 - `[e1, e2, ...]` requiere que todos tengan mismo tipo
@@ -177,6 +184,25 @@ Calls:
 - por ahora solo por nombre (callee debe ser Ident)
 - debe existir firma
 - args deben matchear en tipo y cantidad
+
+## Control flow y `Type::Never` (para `return`)
+
+`return` crea un problema interesante: no es que "tenga un tipo", es que corta el flujo de ejecucion.
+
+Para modelarlo sin hacks, el typechecker introduce un tipo especial:
+- `Never`: significa "esto no produce un valor porque no continua" (diverge).
+
+Como lo usamos:
+- `Stmt::Return` marca el statement como divergente.
+- Un `Block`:
+  - si encuentra un statement divergente, el tipo del bloque pasa a ser `Never` (no importa el tail expr).
+- Un `if`:
+  - si ambas ramas tienen el mismo tipo, ok.
+  - si una rama es `Never`, el `if` toma el tipo de la otra (porque en runtime solo queda esa rama).
+
+Regla de compatibilidad:
+- `Never` es compatible con cualquier tipo esperado.
+  - ejemplo: en una funcion `-> Int`, `return 1;` es ok, y el block que lo contiene puede tiparse como `Never`.
 
 ## Mini ejercicios
 

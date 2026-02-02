@@ -59,3 +59,17 @@ fn gc_builtin_keeps_roots_alive() {
     let v = run_vm("let a = [1, 2, 3]; gc(); a[0]");
     assert_eq!(v, moon_runtime::Value::Int(1));
 }
+
+#[test]
+fn return_statement_exits_function_early() {
+    let v = run_vm(
+        "fn f(x: Int) -> Int { if x > 0 { return x; } else { }; x + 1 }\n         f(0) + f(2)",
+    );
+    assert_eq!(v, moon_runtime::Value::Int(3));
+}
+
+#[test]
+fn function_can_be_implemented_with_only_return() {
+    let v = run_vm("fn f() -> Int { return 1; } f()");
+    assert_eq!(v, moon_runtime::Value::Int(1));
+}

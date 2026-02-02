@@ -4,6 +4,12 @@ use moon_core::span::Span;
 use crate::env::Function;
 use crate::{Env, RuntimeError, Value};
 
+#[derive(Debug, Clone)]
+enum Exec {
+    Value(Value),
+    Return(Value, Span),
+}
+
 pub fn eval_program(program: &Program) -> Result<Value, RuntimeError> {
     let mut env = Env::new();
 
@@ -24,104 +30,178 @@ pub fn eval_program(program: &Program) -> Result<Value, RuntimeError> {
     }
 
     for stmt in &program.stmts {
-        eval_stmt(stmt, &mut env)?;
+        match eval_stmt(stmt, &mut env)? {
+            Exec::Value(_) => {}
+            Exec::Return(_, span) => {
+                return Err(RuntimeError {
+                    message: "return is only allowed inside functions".to_string(),
+                    span,
+                })
+            }
+        }
     }
 
-    match &program.tail {
-        Some(expr) => eval_expr(expr, &mut env),
-        None => Ok(Value::Unit),
+    let result = match &program.tail {
+        Some(expr) => eval_expr(expr, &mut env)?,
+        None => Exec::Value(Value::Unit),
+    };
+
+    match result {
+        Exec::Value(v) => Ok(v),
+        Exec::Return(_, span) => Err(RuntimeError {
+            message: "return is only allowed inside functions".to_string(),
+            span,
+        }),
     }
 }
 
-fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<(), RuntimeError> {
+fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Exec, RuntimeError> {
     match stmt {
         Stmt::Let { name, expr, .. } => {
-            let value = eval_expr(expr, env)?;
+            let value = match eval_expr(expr, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
             env.define_var(name.clone(), value);
-            Ok(())
+            Ok(Exec::Value(Value::Unit))
         }
+
         Stmt::Assign { target, expr, span } => {
-            let value = eval_expr(expr, env)?;
             match target {
-                Expr::Ident(name, _) => env.assign_var(name, value).map_err(|()| RuntimeError {
-                    message: format!("undefined variable: {name}"),
-                    span: *span,
-                })?,
-                Expr::Index {
-                    target: base,
-                    index,
-                    ..
-                } => {
-                    let base_v = eval_expr(base, env)?;
-                    let index_v = eval_expr(index, env)?;
-                    assign_index(env, base_v, index_v, value, *span)?
-                }
-                _ => {
-                    return Err(RuntimeError {
-                        message: "invalid assignment target".to_string(),
+                Expr::Ident(name, _) => {
+                    let value = match eval_expr(expr, env)? {
+                        Exec::Value(v) => v,
+                        Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                    };
+
+                    env.assign_var(name, value).map_err(|()| RuntimeError {
+                        message: format!("undefined variable: {name}"),
                         span: *span,
-                    })
+                    })?;
+
+                    Ok(Exec::Value(Value::Unit))
                 }
+
+                Expr::Index { target, index, .. } => {
+                    // Match VM semantics: evaluate base+index before the RHS.
+                    let base_v = match eval_expr(target, env)? {
+                        Exec::Value(v) => v,
+                        Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                    };
+
+                    let index_v = match eval_expr(index, env)? {
+                        Exec::Value(v) => v,
+                        Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                    };
+
+                    let value = match eval_expr(expr, env)? {
+                        Exec::Value(v) => v,
+                        Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                    };
+
+                    assign_index(env, base_v, index_v, value, *span)?;
+                    Ok(Exec::Value(Value::Unit))
+                }
+
+                _ => Err(RuntimeError {
+                    message: "invalid assignment target".to_string(),
+                    span: *span,
+                }),
             }
-            Ok(())
         }
-        Stmt::Fn { .. } => Ok(()),
-        Stmt::Expr { expr, .. } => {
-            // Expression statement always discards its value.
-            let _ = eval_expr(expr, env)?;
-            Ok(())
+
+        Stmt::Return { expr, span } => {
+            if let Some(expr) = expr {
+                match eval_expr(expr, env)? {
+                    Exec::Value(v) => Ok(Exec::Return(v, *span)),
+                    Exec::Return(v, sp) => Ok(Exec::Return(v, sp)),
+                }
+            } else {
+                Ok(Exec::Return(Value::Unit, *span))
+            }
         }
+
+        Stmt::Fn { .. } => Ok(Exec::Value(Value::Unit)),
+
+        Stmt::Expr { expr, .. } => match eval_expr(expr, env)? {
+            Exec::Value(_) => Ok(Exec::Value(Value::Unit)),
+            Exec::Return(v, sp) => Ok(Exec::Return(v, sp)),
+        },
     }
 }
 
-fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
+fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
     match expr {
-        Expr::Int(i, _) => Ok(Value::Int(*i)),
-        Expr::Bool(b, _) => Ok(Value::Bool(*b)),
-        Expr::String(s, _) => Ok(Value::String(s.clone())),
-        Expr::Ident(name, sp) => env.get_var(name).cloned().ok_or_else(|| RuntimeError {
-            message: format!("undefined variable: {name}"),
-            span: *sp,
-        }),
+        Expr::Int(i, _) => Ok(Exec::Value(Value::Int(*i))),
+        Expr::Bool(b, _) => Ok(Exec::Value(Value::Bool(*b))),
+        Expr::String(s, _) => Ok(Exec::Value(Value::String(s.clone()))),
+        Expr::Ident(name, sp) => {
+            env.get_var(name)
+                .cloned()
+                .map(Exec::Value)
+                .ok_or_else(|| RuntimeError {
+                    message: format!("undefined variable: {name}"),
+                    span: *sp,
+                })
+        }
+
         Expr::Array { elements, .. } => {
             let mut values = Vec::with_capacity(elements.len());
             for e in elements {
-                values.push(eval_expr(e, env)?);
+                match eval_expr(e, env)? {
+                    Exec::Value(v) => values.push(v),
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                }
             }
             let handle = env.heap.alloc_array(values);
-            Ok(Value::Array(handle))
+            Ok(Exec::Value(Value::Array(handle)))
         }
+
         Expr::Object { props, .. } => {
             let mut map = std::collections::HashMap::new();
             for (k, vexpr) in props {
-                let v = eval_expr(vexpr, env)?;
+                let v = match eval_expr(vexpr, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
                 map.insert(k.clone(), v);
             }
             let handle = env.heap.alloc_object(map);
-            Ok(Value::Object(handle))
+            Ok(Exec::Value(Value::Object(handle)))
         }
+
         Expr::Group { expr, .. } => eval_expr(expr, env),
+
         Expr::Block { stmts, tail, .. } => {
             env.push_scope();
             let result = (|| {
                 for stmt in stmts {
-                    eval_stmt(stmt, env)?;
+                    match eval_stmt(stmt, env)? {
+                        Exec::Value(_) => {}
+                        Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                    }
                 }
+
                 match tail {
                     Some(expr) => eval_expr(expr, env),
-                    None => Ok(Value::Unit),
+                    None => Ok(Exec::Value(Value::Unit)),
                 }
             })();
             env.pop_scope();
             result
         }
+
         Expr::If {
             cond,
             then_branch,
             else_branch,
             span,
         } => {
-            let v = eval_expr(cond, env)?;
+            let v = match eval_expr(cond, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
+
             let b = match v {
                 Value::Bool(b) => b,
                 other => {
@@ -131,12 +211,14 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                     })
                 }
             };
+
             if b {
                 eval_expr(then_branch, env)
             } else {
                 eval_expr(else_branch, env)
             }
         }
+
         Expr::Call { callee, args, span } => {
             let name = match &**callee {
                 Expr::Ident(name, _) => name.as_str(),
@@ -159,7 +241,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }
                 let roots = env.roots();
                 let _ = env.heap.collect_garbage(&roots);
-                return Ok(Value::Unit);
+                return Ok(Exec::Value(Value::Unit));
             }
 
             let func = env.get_fn(name).cloned().ok_or_else(|| RuntimeError {
@@ -180,7 +262,10 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
 
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(eval_expr(arg, env)?);
+                match eval_expr(arg, env)? {
+                    Exec::Value(v) => values.push(v),
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                }
             }
 
             // New call frame: only globals + function locals. Caller locals are not visible.
@@ -192,22 +277,37 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
 
             let result = eval_expr(&func.body, env);
             env.restore_scopes(saved_scopes);
-            result
+
+            match result? {
+                Exec::Value(v) => Ok(Exec::Value(v)),
+                Exec::Return(v, _) => Ok(Exec::Value(v)),
+            }
         }
+
         Expr::Index {
             target,
             index,
             span,
         } => {
-            let base_v = eval_expr(target, env)?;
-            let index_v = eval_expr(index, env)?;
-            eval_index(env, base_v, index_v, *span)
+            let base_v = match eval_expr(target, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
+            let index_v = match eval_expr(index, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
+            Ok(Exec::Value(eval_index(env, base_v, index_v, *span)?))
         }
+
         Expr::Unary { op, expr, span } => {
-            let v = eval_expr(expr, env)?;
+            let v = match eval_expr(expr, env)? {
+                Exec::Value(v) => v,
+                Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+            };
             match (op, v) {
-                (UnaryOp::Neg, Value::Int(i)) => Ok(Value::Int(-i)),
-                (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                (UnaryOp::Neg, Value::Int(i)) => Ok(Exec::Value(Value::Int(-i))),
+                (UnaryOp::Not, Value::Bool(b)) => Ok(Exec::Value(Value::Bool(!b))),
                 (UnaryOp::Neg, other) => Err(RuntimeError {
                     message: format!("cannot apply unary '-' to {other:?}"),
                     span: *span,
@@ -218,9 +318,13 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }),
             }
         }
+
         Expr::Binary { lhs, op, rhs, span } => match op {
             BinaryOp::And => {
-                let left = eval_expr(lhs, env)?;
+                let left = match eval_expr(lhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
                 let lb = match left {
                     Value::Bool(b) => b,
                     other => {
@@ -231,11 +335,14 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                     }
                 };
                 if !lb {
-                    return Ok(Value::Bool(false));
+                    return Ok(Exec::Value(Value::Bool(false)));
                 }
-                let right = eval_expr(rhs, env)?;
+                let right = match eval_expr(rhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
                 match right {
-                    Value::Bool(b) => Ok(Value::Bool(b)),
+                    Value::Bool(b) => Ok(Exec::Value(Value::Bool(b))),
                     other => Err(RuntimeError {
                         message: format!("right side of '&&' must be bool, got {other:?}"),
                         span: *span,
@@ -243,7 +350,10 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }
             }
             BinaryOp::Or => {
-                let left = eval_expr(lhs, env)?;
+                let left = match eval_expr(lhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
                 let lb = match left {
                     Value::Bool(b) => b,
                     other => {
@@ -254,11 +364,14 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                     }
                 };
                 if lb {
-                    return Ok(Value::Bool(true));
+                    return Ok(Exec::Value(Value::Bool(true)));
                 }
-                let right = eval_expr(rhs, env)?;
+                let right = match eval_expr(rhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
                 match right {
-                    Value::Bool(b) => Ok(Value::Bool(b)),
+                    Value::Bool(b) => Ok(Exec::Value(Value::Bool(b))),
                     other => Err(RuntimeError {
                         message: format!("right side of '||' must be bool, got {other:?}"),
                         span: *span,
@@ -266,9 +379,15 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }
             }
             _ => {
-                let l = eval_expr(lhs, env)?;
-                let r = eval_expr(rhs, env)?;
-                eval_binary(*op, l, r, *span)
+                let l = match eval_expr(lhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
+                let r = match eval_expr(rhs, env)? {
+                    Exec::Value(v) => v,
+                    Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
+                };
+                Ok(Exec::Value(eval_binary(*op, l, r, *span)?))
             }
         },
     }

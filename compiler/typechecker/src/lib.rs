@@ -77,16 +77,21 @@ fn check_program_with_sink<S: TypeSink>(
 
     // Pass 2: typecheck statements in order (strict: vars must be defined before use).
     for stmt in &program.stmts {
-        check_stmt(stmt, &mut env, sink)?;
+        let _ = check_stmt(stmt, &mut env, sink, None)?;
     }
 
     match &program.tail {
-        Some(expr) => check_expr(expr, &mut env, sink),
+        Some(expr) => check_expr(expr, &mut env, sink, None),
         None => Ok(Type::Unit),
     }
 }
 
-fn check_stmt<S: TypeSink>(stmt: &Stmt, env: &mut TypeEnv, sink: &mut S) -> Result<(), TypeError> {
+fn check_stmt<S: TypeSink>(
+    stmt: &Stmt,
+    env: &mut TypeEnv,
+    sink: &mut S,
+    current_ret: Option<&Type>,
+) -> Result<bool, TypeError> {
     match stmt {
         Stmt::Let { name, ty, expr, .. } => {
             // Minimal contextual typing for empty literals:
@@ -96,93 +101,140 @@ fn check_stmt<S: TypeSink>(stmt: &Stmt, env: &mut TypeEnv, sink: &mut S) -> Resu
                     lower_type(ann)?
                 }
                 (Expr::Object { props, .. }, Some(ann)) if props.is_empty() => lower_type(ann)?,
-                _ => check_expr(expr, env, sink)?,
+                _ => check_expr(expr, env, sink, current_ret)?,
             };
+
+            let mut ann_ty: Option<Type> = None;
             if let Some(ann) = ty {
-                let ann_ty = lower_type(ann)?;
-                if ann_ty != expr_ty {
+                let t = lower_type(ann)?;
+                if !compatible(&t, &expr_ty) {
                     return Err(TypeError {
-                        message: format!("type mismatch: expected {ann_ty}, got {expr_ty}"),
+                        message: format!("type mismatch: expected {t}, got {expr_ty}"),
                         span: ann.span(),
                     });
                 }
+                ann_ty = Some(t);
             }
-            env.define_var(name.clone(), expr_ty);
-            Ok(())
+
+            env.define_var(name.clone(), ann_ty.unwrap_or_else(|| expr_ty.clone()));
+
+            // If the initializer diverges, the statement does too.
+            Ok(matches!(expr_ty, Type::Never))
         }
-        Stmt::Assign { target, expr, span } => {
-            // Assignment is a statement; it must not change the variable type.
-            let rhs_ty = check_expr(expr, env, sink)?;
-            match target {
-                Expr::Ident(name, sp) => {
-                    let var_ty = env.get_var(name).cloned().ok_or_else(|| TypeError {
-                        message: format!("undefined variable: {name}"),
-                        span: *sp,
-                    })?;
-                    if rhs_ty != var_ty {
-                        return Err(TypeError {
-                            message: format!("type mismatch: expected {var_ty}, got {rhs_ty}"),
-                            span: *span,
-                        });
-                    }
-                    Ok(())
+
+        Stmt::Assign { target, expr, span } => match target {
+            Expr::Ident(name, sp) => {
+                let rhs_ty = check_expr(expr, env, sink, current_ret)?;
+
+                // The VM evaluates the RHS before setting the variable. If the RHS diverges,
+                // the assignment never happens.
+                if matches!(rhs_ty, Type::Never) {
+                    return Ok(true);
                 }
-                Expr::Index {
-                    target: base,
-                    index,
-                    ..
-                } => {
-                    let base_ty = check_expr(base, env, sink)?;
-                    let index_ty = check_expr(index, env, sink)?;
-                    match base_ty {
-                        Type::Array(inner) => {
-                            if index_ty != Type::Int {
-                                return Err(TypeError {
-                                    message: format!("array index must be Int, got {index_ty}"),
-                                    span: *span,
-                                });
-                            }
-                            let inner = *inner;
-                            if rhs_ty != inner {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "type mismatch: expected {inner}, got {rhs_ty}"
-                                    ),
-                                    span: *span,
-                                });
-                            }
-                            Ok(())
-                        }
-                        Type::Object(inner) => {
-                            if index_ty != Type::String {
-                                return Err(TypeError {
-                                    message: format!("object key must be String, got {index_ty}"),
-                                    span: *span,
-                                });
-                            }
-                            let inner = *inner;
-                            if rhs_ty != inner {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "type mismatch: expected {inner}, got {rhs_ty}"
-                                    ),
-                                    span: *span,
-                                });
-                            }
-                            Ok(())
-                        }
-                        other => Err(TypeError {
-                            message: format!("cannot assign through index on {other}"),
-                            span: *span,
-                        }),
-                    }
+
+                let var_ty = env.get_var(name).cloned().ok_or_else(|| TypeError {
+                    message: format!("undefined variable: {name}"),
+                    span: *sp,
+                })?;
+
+                if !compatible(&var_ty, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!("type mismatch: expected {var_ty}, got {rhs_ty}"),
+                        span: *span,
+                    });
                 }
-                _ => Err(TypeError {
-                    message: "invalid assignment target".to_string(),
+
+                Ok(false)
+            }
+            Expr::Index {
+                target: base,
+                index,
+                ..
+            } => {
+                // The VM evaluates base+index before the RHS.
+                let base_ty = check_expr(base, env, sink, current_ret)?;
+                if matches!(base_ty, Type::Never) {
+                    return Ok(true);
+                }
+
+                let index_ty = check_expr(index, env, sink, current_ret)?;
+                if matches!(index_ty, Type::Never) {
+                    return Ok(true);
+                }
+
+                let rhs_ty = check_expr(expr, env, sink, current_ret)?;
+                if matches!(rhs_ty, Type::Never) {
+                    return Ok(true);
+                }
+
+                match base_ty {
+                    Type::Array(inner) => {
+                        if index_ty != Type::Int {
+                            return Err(TypeError {
+                                message: format!("array index must be Int, got {index_ty}"),
+                                span: *span,
+                            });
+                        }
+                        let inner = *inner;
+                        if !compatible(&inner, &rhs_ty) {
+                            return Err(TypeError {
+                                message: format!("type mismatch: expected {inner}, got {rhs_ty}"),
+                                span: *span,
+                            });
+                        }
+                        Ok(false)
+                    }
+                    Type::Object(inner) => {
+                        if index_ty != Type::String {
+                            return Err(TypeError {
+                                message: format!("object key must be String, got {index_ty}"),
+                                span: *span,
+                            });
+                        }
+                        let inner = *inner;
+                        if !compatible(&inner, &rhs_ty) {
+                            return Err(TypeError {
+                                message: format!("type mismatch: expected {inner}, got {rhs_ty}"),
+                                span: *span,
+                            });
+                        }
+                        Ok(false)
+                    }
+                    other => Err(TypeError {
+                        message: format!("cannot assign through index on {other}"),
+                        span: *span,
+                    }),
+                }
+            }
+            _ => Err(TypeError {
+                message: "invalid assignment target".to_string(),
+                span: *span,
+            }),
+        },
+
+        Stmt::Return { expr, span } => {
+            let Some(expected) = current_ret else {
+                return Err(TypeError {
+                    message: "return is only allowed inside functions".to_string(),
                     span: *span,
-                }),
+                });
+            };
+
+            let got = match expr {
+                Some(expr) => check_expr(expr, env, sink, current_ret)?,
+                None => Type::Unit,
+            };
+
+            if !compatible(expected, &got) {
+                return Err(TypeError {
+                    message: format!("type mismatch: expected {expected}, got {got}"),
+                    span: *span,
+                });
             }
+
+            Ok(true)
         }
+
         Stmt::Fn {
             name,
             params,
@@ -197,18 +249,19 @@ fn check_stmt<S: TypeSink>(stmt: &Stmt, env: &mut TypeEnv, sink: &mut S) -> Resu
                 span: *span,
             })?;
 
+            let expected = sig.ret.clone();
+
             let saved = env.take_scopes();
             env.push_scope();
             for (param, ty) in params.iter().zip(sig.params.iter()) {
                 env.define_var(param.name.clone(), ty.clone());
             }
 
-            let body_ty = check_expr(body, env, sink);
+            let body_ty = check_expr(body, env, sink, Some(&expected));
             env.restore_scopes(saved);
 
             let body_ty = body_ty?;
-            let expected = sig.ret.clone();
-            if body_ty != expected {
+            if !compatible(&expected, &body_ty) {
                 return Err(TypeError {
                     message: format!("type mismatch: expected {expected}, got {body_ty}"),
                     span: *span,
@@ -218,11 +271,13 @@ fn check_stmt<S: TypeSink>(stmt: &Stmt, env: &mut TypeEnv, sink: &mut S) -> Resu
             // Also validate that the declared return type is a known type.
             // (We lowered it in pass 1, but this produces a nicer span for errors in the return type.)
             let _ = lower_type(ret_ty)?;
-            Ok(())
+
+            Ok(false)
         }
+
         Stmt::Expr { expr, .. } => {
-            let _ = check_expr(expr, env, sink)?;
-            Ok(())
+            let ty = check_expr(expr, env, sink, current_ret)?;
+            Ok(matches!(ty, Type::Never))
         }
     }
 }
@@ -231,6 +286,7 @@ fn check_expr<S: TypeSink>(
     expr: &Expr,
     env: &mut TypeEnv,
     sink: &mut S,
+    current_ret: Option<&Type>,
 ) -> Result<Type, TypeError> {
     let ty = match expr {
         Expr::Int(_, _) => Type::Int,
@@ -240,6 +296,7 @@ fn check_expr<S: TypeSink>(
             message: format!("undefined variable: {name}"),
             span: *sp,
         })?,
+
         Expr::Array { elements, span } => {
             if elements.is_empty() {
                 return Err(TypeError {
@@ -247,9 +304,17 @@ fn check_expr<S: TypeSink>(
                     span: *span,
                 });
             }
-            let first = check_expr(&elements[0], env, sink)?;
+
+            let first = check_expr(&elements[0], env, sink, current_ret)?;
+            if matches!(first, Type::Never) {
+                return Ok(Type::Never);
+            }
+
             for elem in &elements[1..] {
-                let ty = check_expr(elem, env, sink)?;
+                let ty = check_expr(elem, env, sink, current_ret)?;
+                if matches!(ty, Type::Never) {
+                    return Ok(Type::Never);
+                }
                 if ty != first {
                     return Err(TypeError {
                         message: format!(
@@ -259,8 +324,10 @@ fn check_expr<S: TypeSink>(
                     });
                 }
             }
+
             Type::Array(Box::new(first))
         }
+
         Expr::Object { props, span } => {
             if props.is_empty() {
                 return Err(TypeError {
@@ -268,9 +335,17 @@ fn check_expr<S: TypeSink>(
                     span: *span,
                 });
             }
-            let first = check_expr(&props[0].1, env, sink)?;
+
+            let first = check_expr(&props[0].1, env, sink, current_ret)?;
+            if matches!(first, Type::Never) {
+                return Ok(Type::Never);
+            }
+
             for (_, value) in &props[1..] {
-                let ty = check_expr(value, env, sink)?;
+                let ty = check_expr(value, env, sink, current_ret)?;
+                if matches!(ty, Type::Never) {
+                    return Ok(Type::Never);
+                }
                 if ty != first {
                     return Err(TypeError {
                         message: format!(
@@ -280,39 +355,57 @@ fn check_expr<S: TypeSink>(
                     });
                 }
             }
+
             Type::Object(Box::new(first))
         }
-        Expr::Group { expr, .. } => check_expr(expr, env, sink)?,
+
+        Expr::Group { expr, .. } => check_expr(expr, env, sink, current_ret)?,
+
         Expr::Block { stmts, tail, .. } => {
             env.push_scope();
             let result = (|| {
                 for stmt in stmts {
-                    check_stmt(stmt, env, sink)?;
+                    let diverges = check_stmt(stmt, env, sink, current_ret)?;
+                    if diverges {
+                        return Ok(Type::Never);
+                    }
                 }
                 match tail {
-                    Some(expr) => check_expr(expr, env, sink),
+                    Some(expr) => check_expr(expr, env, sink, current_ret),
                     None => Ok(Type::Unit),
                 }
             })();
             env.pop_scope();
             result?
         }
+
         Expr::If {
             cond,
             then_branch,
             else_branch,
             span,
         } => {
-            let cond_ty = check_expr(cond, env, sink)?;
+            let cond_ty = check_expr(cond, env, sink, current_ret)?;
+            if matches!(cond_ty, Type::Never) {
+                return Ok(Type::Never);
+            }
             if cond_ty != Type::Bool {
                 return Err(TypeError {
                     message: format!("if condition must be Bool, got {cond_ty}"),
                     span: *span,
                 });
             }
-            let then_ty = check_expr(then_branch, env, sink)?;
-            let else_ty = check_expr(else_branch, env, sink)?;
-            if then_ty != else_ty {
+
+            let then_ty = check_expr(then_branch, env, sink, current_ret)?;
+            let else_ty = check_expr(else_branch, env, sink, current_ret)?;
+
+            if then_ty == else_ty {
+                then_ty
+            } else if matches!(then_ty, Type::Never) {
+                else_ty
+            } else if matches!(else_ty, Type::Never) {
+                then_ty
+            } else {
                 return Err(TypeError {
                     message: format!(
                         "if branches must have the same type: got {then_ty} and {else_ty}"
@@ -320,8 +413,8 @@ fn check_expr<S: TypeSink>(
                     span: *span,
                 });
             }
-            then_ty
         }
+
         Expr::Call { callee, args, span } => {
             let name = match &**callee {
                 Expr::Ident(name, _) => name.as_str(),
@@ -359,8 +452,11 @@ fn check_expr<S: TypeSink>(
             );
 
             for (arg_expr, param_ty) in args.iter().zip(sig.params.iter()) {
-                let arg_ty = check_expr(arg_expr, env, sink)?;
-                if &arg_ty != param_ty {
+                let arg_ty = check_expr(arg_expr, env, sink, current_ret)?;
+                if matches!(arg_ty, Type::Never) {
+                    return Ok(Type::Never);
+                }
+                if !compatible(param_ty, &arg_ty) {
                     return Err(TypeError {
                         message: format!(
                             "argument type mismatch: expected {param_ty}, got {arg_ty}"
@@ -372,13 +468,22 @@ fn check_expr<S: TypeSink>(
 
             sig.ret.clone()
         }
+
         Expr::Index {
             target,
             index,
             span,
         } => {
-            let base = check_expr(target, env, sink)?;
-            let idx = check_expr(index, env, sink)?;
+            let base = check_expr(target, env, sink, current_ret)?;
+            if matches!(base, Type::Never) {
+                return Ok(Type::Never);
+            }
+
+            let idx = check_expr(index, env, sink, current_ret)?;
+            if matches!(idx, Type::Never) {
+                return Ok(Type::Never);
+            }
+
             match base {
                 Type::Array(inner) => {
                     if idx != Type::Int {
@@ -406,8 +511,12 @@ fn check_expr<S: TypeSink>(
                 }
             }
         }
+
         Expr::Unary { op, expr, span } => {
-            let inner = check_expr(expr, env, sink)?;
+            let inner = check_expr(expr, env, sink, current_ret)?;
+            if matches!(inner, Type::Never) {
+                return Ok(Type::Never);
+            }
             match op {
                 UnaryOp::Neg => {
                     if inner != Type::Int {
@@ -429,10 +538,48 @@ fn check_expr<S: TypeSink>(
                 }
             }
         }
+
         Expr::Binary { lhs, op, rhs, span } => {
-            let l = check_expr(lhs, env, sink)?;
-            let r = check_expr(rhs, env, sink)?;
-            check_binary(*op, l, r, *span)?
+            match op {
+                BinaryOp::And | BinaryOp::Or => {
+                    let l = check_expr(lhs, env, sink, current_ret)?;
+                    if matches!(l, Type::Never) {
+                        return Ok(Type::Never);
+                    }
+                    if l != Type::Bool {
+                        return Err(TypeError {
+                            message: format!("logical operators require Bool, got {l} and ..."),
+                            span: *span,
+                        });
+                    }
+
+                    let r = check_expr(rhs, env, sink, current_ret)?;
+                    if matches!(r, Type::Never) {
+                        // Short-circuit means the expression can still evaluate to Bool.
+                        Type::Bool
+                    } else if r == Type::Bool {
+                        Type::Bool
+                    } else {
+                        return Err(TypeError {
+                            message: format!("logical operators require Bool, got {l} and {r}"),
+                            span: *span,
+                        });
+                    }
+                }
+                _ => {
+                    let l = check_expr(lhs, env, sink, current_ret)?;
+                    if matches!(l, Type::Never) {
+                        return Ok(Type::Never);
+                    }
+
+                    let r = check_expr(rhs, env, sink, current_ret)?;
+                    if matches!(r, Type::Never) {
+                        return Ok(Type::Never);
+                    }
+
+                    check_binary(*op, l, r, *span)?
+                }
+            }
         }
     };
 
@@ -475,15 +622,16 @@ fn check_binary(op: BinaryOp, l: Type, r: Type, span: Span) -> Result<Type, Type
             }
         }
         BinaryOp::And | BinaryOp::Or => {
-            if l == Type::Bool && r == Type::Bool {
-                Ok(Type::Bool)
-            } else {
-                Err(err(format!(
-                    "logical operators require Bool, got {l} and {r}"
-                )))
-            }
+            // And/Or are handled in `check_expr` to model short-circuit + Never.
+            Err(err(
+                "internal error: unexpected And/Or in check_binary".to_string()
+            ))
         }
     }
+}
+
+fn compatible(expected: &Type, got: &Type) -> bool {
+    expected == got || matches!(got, Type::Never)
 }
 
 fn lower_type(ty: &TypeExpr) -> Result<Type, TypeError> {

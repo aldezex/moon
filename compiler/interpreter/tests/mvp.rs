@@ -1,13 +1,17 @@
 use moon_core::lexer::lex;
 use moon_core::parser::parse;
 use moon_core::source::Source;
-use moon_interpreter::{eval_program, Value};
+use moon_interpreter::{eval_program, RuntimeError, Value};
 
-fn run(src: &str) -> Value {
+fn run_result(src: &str) -> Result<Value, RuntimeError> {
     let source = Source::new("<test>", src.to_string());
     let tokens = lex(&source.text).unwrap();
     let program = parse(tokens).unwrap();
-    eval_program(&program).unwrap()
+    eval_program(&program)
+}
+
+fn run(src: &str) -> Value {
+    run_result(src).unwrap()
 }
 
 #[test]
@@ -72,4 +76,17 @@ fn object_literal_index_and_assignment() {
 fn variable_assignment_updates_nearest_scope() {
     let v = run("let x = 1; { let x = 2; x = 3; x } + x");
     assert_eq!(v, Value::Int(4));
+}
+
+#[test]
+fn return_is_error_at_top_level() {
+    let err = run_result("return 1;").unwrap_err();
+    assert!(err.message.contains("return"));
+}
+
+#[test]
+fn return_exits_function_early() {
+    let v =
+        run("fn f(x: Int) -> Int { if x > 0 { return x; } else { }; x + 1 }\n         f(0) + f(2)");
+    assert_eq!(v, Value::Int(3));
 }

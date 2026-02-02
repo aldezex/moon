@@ -53,6 +53,7 @@ Funciones (MVP):
 - se declaran top-level
 - no son valores (todavia)
 - no capturan variables locales (todavia)
+- soportan `return expr?;` para salir temprano
 
 ## eval_program: pipeline del interpreter
 
@@ -70,6 +71,8 @@ Archivo:
 3) Evalua el `program.tail` si existe
    - ese es el valor final del script
 
+Nota: si un `return` intenta "escapar" al top-level, el interpreter lo convierte en error.
+
 ## Statements
 
 1) `let name = expr;`
@@ -84,10 +87,16 @@ Archivo:
      - `arr[i] = ...;` -> muta array en heap
      - `obj["k"] = ...;` -> muta object en heap
 
-3) `expr;`
+3) `return expr?;`
+   - `expr` es opcional (`return;` devuelve `Unit`)
+   - semantica: solo permitido dentro de funciones (el typechecker lo valida)
+   - implementacion: es un "control flow no-local" que se propaga hacia arriba hasta que
+     lo consume el call frame de una funcion
+
+4) `expr;`
    - evalua la expresion y descarta su valor
 
-4) `fn ...`
+5) `fn ...`
    - se registra; no ejecuta al "pasar"
 
 ## Expresiones
@@ -119,6 +128,23 @@ Calls:
   - crea scope nuevo con params
   - ejecuta body
   - restaura scopes del caller
+- si el body devuelve `return`, el call frame lo consume y ese valor pasa a ser el resultado de la llamada
+
+### Control flow no-local: como implementamos `return`
+
+Una leccion clasica en interpretes/VMs: `return` no es un "valor normal".
+Es una salida temprana que tiene que cruzar multiples nodos (bloques, ifs, etc.).
+
+En el interpreter MVP, en vez de que `eval_*` devuelva solo `Value`, devolvemos un enum interno:
+
+- `Exec::Value(Value)`
+- `Exec::Return(Value, Span)`
+
+Regla:
+- cualquier `eval_*` que reciba `Exec::Return` lo re-propaga hacia arriba
+- solo el handler de llamadas a funcion lo "consume" (y convierte a `Value`)
+
+Esto evita hacks (como exceptions) y hace muy facil extender despues con `break/continue` para loops.
 
 Arrays/Objects:
 - `[1, 2, 3]` -> `Value::Array(handle)` (heap alloc)
