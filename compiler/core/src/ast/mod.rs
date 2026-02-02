@@ -20,6 +20,11 @@ pub enum Stmt {
         expr: Expr,
         span: Span,
     },
+    Assign {
+        target: Expr,
+        expr: Expr,
+        span: Span,
+    },
     Fn {
         name: String,
         params: Vec<Param>,
@@ -37,6 +42,7 @@ impl Stmt {
     pub fn span(&self) -> Span {
         match self {
             Stmt::Let { span, .. } => *span,
+            Stmt::Assign { span, .. } => *span,
             Stmt::Fn { span, .. } => *span,
             Stmt::Expr { span, .. } => *span,
         }
@@ -53,12 +59,18 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Named(String, Span),
+    Generic {
+        base: String,
+        args: Vec<TypeExpr>,
+        span: Span,
+    },
 }
 
 impl TypeExpr {
     pub fn span(&self) -> Span {
         match self {
             TypeExpr::Named(_, sp) => *sp,
+            TypeExpr::Generic { span, .. } => *span,
         }
     }
 }
@@ -92,6 +104,14 @@ pub enum Expr {
     Bool(bool, Span),
     String(String, Span),
     Ident(String, Span),
+    Array {
+        elements: Vec<Expr>,
+        span: Span,
+    },
+    Object {
+        props: Vec<(String, Expr)>,
+        span: Span,
+    },
     Block {
         stmts: Vec<Stmt>,
         tail: Option<Box<Expr>>,
@@ -119,6 +139,11 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    Index {
+        target: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     Group {
         expr: Box<Expr>,
         span: Span,
@@ -132,11 +157,14 @@ impl Expr {
             Expr::Bool(_, sp) => *sp,
             Expr::String(_, sp) => *sp,
             Expr::Ident(_, sp) => *sp,
+            Expr::Array { span, .. } => *span,
+            Expr::Object { span, .. } => *span,
             Expr::Block { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Unary { span, .. } => *span,
             Expr::Binary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
             Expr::Group { span, .. } => *span,
         }
     }

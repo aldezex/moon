@@ -1,126 +1,149 @@
-# 06 - Interpreter (tree-walk)
+# 06 - Interpreter (tree-walk) + scoping + heap
 
-## Que es un interpreter "tree-walk"
+## Que es un tree-walk interpreter
 
 Un tree-walk interpreter ejecuta el AST directamente:
-- No genera bytecode.
-- No hace optimizaciones grandes.
-- Es ideal para un MVP porque permite iterar en sintaxis y semantica rapido.
+- no genera bytecode
+- no optimiza demasiado
+- es perfecto para iterar rapido en semantica del lenguaje
 
-En Moon, el interpreter vive en un crate separado para no mezclar frontend (core) con semantica.
+En Moon:
+- `moon run` usa el interpreter (despues de typecheck)
+- `moon vm` usa bytecode + VM (tambien despues de typecheck)
+
+Crate:
+- `compiler/interpreter` (`moon_interpreter`)
 
 Archivos:
-- `compiler/interpreter/src/lib.rs`
-- `compiler/interpreter/src/value.rs`
 - `compiler/interpreter/src/env.rs`
-- `compiler/interpreter/src/error.rs`
 - `compiler/interpreter/src/eval.rs`
+- `compiler/interpreter/src/error.rs`
 
-## Value: los valores en runtime
+## Value y Heap viven en moon_runtime
 
-Archivo:
-- `compiler/interpreter/src/value.rs`
+En vez de que cada backend invente su propio `Value`, centralizamos runtime en:
+- `compiler/runtime` (`moon_runtime`)
 
-Por ahora:
-- `Int(i64)`
-- `Bool(bool)`
-- `String(String)`
-- `Unit` (equivalente a "no valor"; lo usamos como resultado de `let`)
+Archivos:
+- `compiler/runtime/src/value.rs`
+- `compiler/runtime/src/heap.rs`
 
-## Env: variables
+Esto permite que:
+- interpreter y VM compartan el mismo modelo de valores
+- el GC sea unico
+- el typechecker se alinee con el runtime
+
+## Env: variables, scopes, funciones y heap
 
 Archivo:
 - `compiler/interpreter/src/env.rs`
 
-`Env` maneja 3 cosas:
-- variables globales
-- scopes locales (stack) para bloques
-- tabla global de funciones
-
-Variables:
+`Env` mantiene:
 - `globals: HashMap<String, Value>`
-- `scopes: Vec<HashMap<String, Value>>` (innermost al final)
-
-Funciones:
-- `funcs: HashMap<String, Function>`
+- `scopes: Vec<HashMap<String, Value>>` (stack de scopes; el ultimo es el mas interno)
+- `funcs: HashMap<String, Function>` (funciones top-level)
+- `heap: Heap` (para arrays/objects)
 
 Reglas:
-- `let` define en el scope actual (si estamos dentro de un bloque) o en `globals` (si estamos en top-level).
-- lookup de variables busca primero en scopes locales, luego en globales.
+- `let` define en el scope actual si existe, si no en globals.
+- lookup busca primero en scopes (inner -> outer) y luego en globals.
+- assignment (`x = ...;`) actualiza el scope mas cercano donde exista `x`.
 
-Funciones hoy no son valores (todavia):
-- Se declaran con `fn` (solo top-level por ahora)
-- Se llaman por nombre: `f(1, 2)`
+Funciones (MVP):
+- se declaran top-level
+- no son valores (todavia)
+- no capturan variables locales (todavia)
 
-## RuntimeError: errores en ejecucion
-
-Archivo:
-- `compiler/interpreter/src/error.rs`
-
-`RuntimeError` incluye:
-- `message`
-- `span` (importante: seguimos apuntando a la ubicacion exacta del AST)
-
-Ejemplo de error:
-- variable no definida
-- operador aplicado a tipos incorrectos
-- division por 0
-
-## Evaluador (eval)
+## eval_program: pipeline del interpreter
 
 Archivo:
 - `compiler/interpreter/src/eval.rs`
 
-Entrada:
-- `Program` de `moon_core::ast`
+`eval_program(program)`:
 
-Salida:
-- `Result<Value, RuntimeError>`
+1) Pre-pass de funciones:
+   - registra todas las `fn` antes de ejecutar nada
+   - permite call-before-definition (estilo Rust items)
 
-### Flujo principal
+2) Ejecuta statements en orden
 
-- `eval_program(program)`:
-  1) Hace un pre-pass para registrar todas las funciones (`fn`) antes de ejecutar nada (estilo Rust items).
-  2) Ejecuta los statements en orden (lets y expr statements).
-  3) Si existe una tail expression (`program.tail`), ese es el valor final.
+3) Evalua el `program.tail` si existe
+   - ese es el valor final del script
 
-### Statements
+## Statements
 
-- `let name = expr;`
-  - evalua `expr`
-  - guarda en `Env`
-  - devuelve `Unit`
-- `expr;` (expr statement)
-  - evalua la expresion y descarta el valor (devuelve `Unit`)
-- `fn name(...) -> Type { ... }`
-  - se registra en la tabla de funciones (no devuelve valor)
+1) `let name = expr;`
+   - evalua `expr`
+   - define `name`
+   - resultado del statement: `Unit`
 
-### Expresiones
+2) `target = expr;`
+   - evalua RHS
+   - aplica assignment:
+     - `x = ...;` -> update variable
+     - `arr[i] = ...;` -> muta array en heap
+     - `obj["k"] = ...;` -> muta object en heap
 
-Soportamos:
-- literales / ident
-- bloques `{ ... }` con scope y tail expression
-- `if ... else ...` como expresion
-- llamadas `f(x, y)`
-- unarios: `-` para ints, `!` para bools
+3) `expr;`
+   - evalua la expresion y descarta su valor
+
+4) `fn ...`
+   - se registra; no ejecuta al "pasar"
+
+## Expresiones
+
+Primitivas:
+- ints/bools/strings/ident
+
+Blocks:
+- `{ ... }` introduce scope nuevo
+- ejecuta statements
+- devuelve el tail expression si existe, si no `Unit`
+
+If/else:
+- `if cond { ... } else { ... }` es una expresion
+- `cond` debe ser bool (en runtime, si no, error)
+
+Ops:
+- unarios: `-` para Int, `!` para Bool
 - binarios:
-  - Aritmetica: `+ - * / %` (ints)
-  - Concat: `string + string`
-  - Comparaciones: `< <= > >=` (ints)
-  - Igualdad: `== !=` (cualquier `Value` comparable por igualdad)
-  - Logicos: `&& ||` con short-circuit
+  - aritmetica para Int
+  - concatenacion String + String
+  - comparaciones para Int
+  - `&&` y `||` con short-circuit
 
-Short-circuit:
-- `a && b`: si `a` es `false`, no evalua `b`
-- `a || b`: si `a` es `true`, no evalua `b`
+Calls:
+- solo por nombre (callee debe ser `Ident`)
+- crea un "call frame" logico:
+  - guarda scopes del caller
+  - crea scope nuevo con params
+  - ejecuta body
+  - restaura scopes del caller
 
-### Scoping (detalle importante)
+Arrays/Objects:
+- `[1, 2, 3]` -> `Value::Array(handle)` (heap alloc)
+- `#{ a: 1 }` -> `Value::Object(handle)` (heap alloc)
 
-Los bloques son scopes lexicos:
-- `{ let x = 2; x }` devuelve `2` y `x` no existe fuera del bloque.
+Indexing:
+- `arr[0]` lee elemento
+- `obj["k"]` lee valor
 
-Las funciones **no capturan** variables locales del caller (no hay closures aun):
-- Cuando llamamos una funcion, ejecutamos su cuerpo con:
-  - acceso a `globals`
-  - un scope local nuevo con sus parametros/variables
-  - sin acceso a scopes del caller
+## GC en el interpreter (builtin `gc()`)
+
+El heap vive en `Env.heap`.
+
+En el MVP, el GC se dispara manualmente via builtin:
+- `gc()`
+
+Implementacion:
+- junta roots (`Env::roots()`) clonando valores de globals + scopes
+- llama `heap.collect_garbage(&roots)`
+
+Esto sirve como "herramienta de debug" para validar que el GC no rompe nada.
+A futuro, el runtime/VM lo disparan automatico por heuristica (alloc threshold).
+
+## Mini ejercicios
+
+1) Implementa un builtin `heap_stats()` que devuelva `{ live: Int, freed: Int }`.
+2) Cambia assignment para que devuelva `Unit` como expresion (en vez de statement).
+3) Agrega un `print(x)` builtin (solo para `String` al principio).

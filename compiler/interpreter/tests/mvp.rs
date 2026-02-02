@@ -42,20 +42,34 @@ fn if_expression() {
 
 #[test]
 fn functions_work_and_do_not_capture_caller_locals() {
-    let v = run(
-        "let x = 10;
+    let v = run("let x = 10;
          fn f() -> Int { x }
-         { let x = 20; f() }",
-    );
+         { let x = 20; f() }");
     assert_eq!(v, Value::Int(10));
 }
 
 #[test]
 fn can_call_function_before_its_definition() {
-    let v = run(
-        "f(1);
+    let v = run("f(1);
          fn f(x: Int) -> Int { x + 1 }
-         f(1)",
-    );
+         f(1)");
     assert_eq!(v, Value::Int(2));
+}
+
+#[test]
+fn array_literal_index_and_assignment() {
+    let v = run("let a = [1, 2, 3]; a[0] = 10; a[0] + a[1]");
+    assert_eq!(v, Value::Int(12));
+}
+
+#[test]
+fn object_literal_index_and_assignment() {
+    let v = run("let o = #{ a: 1, \"b\": 2 }; o[\"a\"] = 10; o[\"a\"] + o[\"b\"]");
+    assert_eq!(v, Value::Int(12));
+}
+
+#[test]
+fn variable_assignment_updates_nearest_scope() {
+    let v = run("let x = 1; { let x = 2; x = 3; x } + x");
+    assert_eq!(v, Value::Int(4));
 }

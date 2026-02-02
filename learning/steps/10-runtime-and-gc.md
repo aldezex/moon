@@ -1,119 +1,179 @@
-# 10 - Runtime y memoria (GC) (diseño)
+# 10 - Runtime y memoria (heap + GC mark/sweep)
 
-Este capitulo describe el plan para pasar del runtime MVP (solo `Int/Bool/String/Unit`) a un runtime de lenguaje de scripting real con objetos, arrays y closures.
+## Que es el "runtime" en un lenguaje
 
-Todavia no esta implementado; es el siguiente bloque grande de trabajo.
+Cuando hablamos de runtime, hablamos de:
+- como representamos valores en ejecucion (`Value`)
+- donde viven valores "grandes" (heap)
+- como se maneja memoria (GC)
+- que operaciones existen (indexing, mutacion, etc.)
 
-## Por que necesitamos heap + GC
+En Moon, el runtime es un crate separado para que:
+- interpreter y VM compartan `Value`
+- el GC sea unico
+- el resto del compilador no se acople a un backend
 
-En un lenguaje tipo JS/TS queremos:
-- arrays y objetos mutables
-- closures (funciones que capturan variables)
-- grafos de objetos con ciclos
+Crate:
+- `compiler/runtime` (`moon_runtime`)
 
-Con valores "por copia" (owned `Vec<Value>` dentro de `Value`) no podemos:
-- compartir eficientemente estructuras grandes
-- representar ciclos
-- tener identidad (dos variables apuntando al mismo objeto) sin duplicar
+Archivos:
+- `compiler/runtime/src/value.rs`
+- `compiler/runtime/src/heap.rs`
 
-La solucion tipica: asignar objetos en heap y referenciarlos con handles/pointers:
-- `Value::Obj(Handle)`
-- `Value::Array(Handle)`
-- `Value::Function(Handle)` (closures)
+## Value: valores de ejecucion
 
-Y limpiar memoria automaticamente via **GC por trazado** (mark/sweep).
+Archivo:
+- `compiler/runtime/src/value.rs`
 
-## Diseño sugerido (simple y incremental)
+`Value` incluye:
+- `Int(i64)`
+- `Bool(bool)`
+- `String(String)`
+- `Unit`
+- `Array(GcRef)`
+- `Object(GcRef)`
 
-### 1) Separar runtime en un crate
+Idea clave:
+- `Array` y `Object` no guardan su contenido inline.
+- guardan un handle `GcRef` que apunta al heap.
 
-Nuevo crate sugerido:
-- `compiler/runtime`
+Esto da:
+- identidad (dos variables pueden apuntar al mismo array/object)
+- mutabilidad sin copiar estructuras grandes
 
-Responsabilidades:
-- `Value` (incluyendo referencias a heap)
-- `Heap` (alloc + GC)
-- primitivas builtin (string ops, array ops, etc.)
+## Heap: objetos trazables
 
-El interpreter/VM solo "usa" el runtime.
+Archivo:
+- `compiler/runtime/src/heap.rs`
 
-### 2) Representar heap objects
+### Representacion
 
-Un MVP de heap se puede modelar asi:
+El heap es:
+- `Vec<Option<HeapObject>>` (slots)
+- `free_list: Vec<usize>` (indices libres reutilizables)
 
-- `Handle(usize)` apunta a un slot en un `Vec<Option<HeapObject>>`
-- `HeapObject` tiene:
-  - `marked: bool`
-  - `kind: ObjectKind`
+`GcRef(usize)` apunta a un slot.
 
-Donde `ObjectKind` puede ser:
+`HeapObject` tiene:
+- `marked: bool` (para GC)
+- `kind: HeapObjectKind`
+
+`HeapObjectKind` hoy soporta:
 - `Array(Vec<Value>)`
 - `Object(HashMap<String, Value>)`
-- `Closure { params, body, captured_env }`
 
-### 3) Mark phase (trazado)
+### API del heap (MVP)
 
-Inputs: conjunto de roots (valores vivos).
+Alloc:
+- `alloc_array(Vec<Value>) -> GcRef`
+- `alloc_object(HashMap<String, Value>) -> GcRef`
+
+Acceso/mutacion:
+- `array_get(handle, idx) -> Option<&Value>`
+- `array_set(handle, idx, value) -> Result<(), String>`
+- `object_get(handle, key) -> Option<&Value>`
+- `object_set(handle, key, value) -> Result<(), String>`
+
+Nota:
+- `array_set` hoy exige `idx < len` (no auto-grow). Es una decision MVP.
+
+## GC mark/sweep (como funciona)
+
+El GC se dispara cuando alguien llama:
+- `Heap::collect_garbage(roots)`
+
+Y hace dos fases.
+
+### 1) Mark
+
+Input:
+- `roots: &[Value]`
 
 Roots tipicos:
-- variables globales
-- scopes locales actuales
-- stack frames (si hay llamadas a funciones)
-
-Algoritmo:
-- recorrer cada `Value`
-  - si es primitivo, no hace nada
-  - si es `Handle`, marcar el objeto y recorrer recursivamente sus hijos (sus `Value` internos)
-
-### 4) Sweep phase
-
-Recorrer todos los slots del heap:
-- si `marked == false`: liberar (slot = None, agregar a free-list)
-- si `marked == true`: desmarcar para la proxima GC
-
-## Interaccion con el lenguaje (cuando exista)
-
-### Mutabilidad
-
-Si agregamos:
-- `arr.push(x)`
-- `obj.key = v`
-
-Entonces los objetos deben tener identidad y vivir en heap.
-
-### Closures (captura lexica)
-
-Para closures necesitamos capturar un "environment" persistente:
-- una estructura tipo `EnvFrame` en heap (o una lista de frames)
-- `Value::Closure(handle)` que apunta a `{ func, env }`
-
-La GC debe poder trazar:
-- desde una closure hacia su `env`
-- desde un `env` hacia sus values
-
-## Integracion con typechecker
-
-Cuando existan objetos/arrays:
-- el typechecker debe conocer tipos como:
-  - `Array<T>`
-  - `Object` (posible: `Record<K,V>` o tipos estructurales)
-
-Esto probablemente requiere extender `TypeExpr` y el parser de tipos.
-
-## Integracion con VM
-
-En una VM, el root set incluye:
-- stack de valores (operand stack)
-- call frames
 - globals
+- scopes actuales
+- operand stack (en la VM)
 
-La VM puede disparar GC:
-- cuando el heap crece mas de X bytes/objetos
-- o cada N allocs
+Mark recorre cada root:
+- si es primitivo, no hace nada
+- si es `Array(GcRef)`/`Object(GcRef)`:
+  - marca el objeto en el heap
+  - recorre recursivamente sus hijos (`Vec<Value>` o `HashMap<String, Value>`)
 
-## Siguiente paso practico
+### 2) Sweep
 
-Antes de implementar un GC completo, conviene:
-1) agregar arrays/objects como valores heap sin mutabilidad (solo literales + lectura)
-2) agregar mutabilidad basica
-3) recien ahi: GC mark/sweep (cuando aparezcan ciclos/comparticion real)
+Recorre todos los slots:
+- si `marked == false`: libera el slot (lo pone en `None`) y lo agrega a `free_list`
+- si `marked == true`: lo desmarca para el proximo ciclo
+
+Resultado:
+- se devuelve un `HeapStats` con conteos utiles (live/freed).
+
+## Donde aparecen las roots en Moon
+
+### Interpreter
+
+Crate:
+- `compiler/interpreter`
+
+El heap vive en `Env.heap`.
+
+El builtin `gc()`:
+- junta roots con `Env::roots()` (globals + scopes)
+- llama `heap.collect_garbage(&roots)`
+
+Archivo:
+- `compiler/interpreter/src/eval.rs`
+
+### VM
+
+Crate:
+- `compiler/vm`
+
+El builtin `gc()` existe como funcion builtin del modulo y la VM lo intercepta:
+- junta roots:
+  - globals
+  - scopes de todos los frames
+  - operand stack
+- corre GC
+
+Archivo:
+- `compiler/vm/src/vm.rs`
+
+## Relacion con el lenguaje (sintaxis)
+
+En el lenguaje, arrays/objects se crean con literales:
+- arrays: `[1, 2, 3]`
+- objects: `#{ a: 1, "b": 2 }`
+
+Indexing:
+- `arr[0]`
+- `obj["k"]`
+
+Mutacion (assignment statement):
+- `arr[0] = 10;`
+- `obj["k"] = 10;`
+
+Todo esto se apoya en:
+- `Value::Array` / `Value::Object`
+- `Heap::{array_get,array_set,object_get,object_set}`
+
+## Limitaciones actuales (a proposito)
+
+El GC y el heap estan listos, pero:
+- no hay closures aun (no hay `Value::Closure`)
+- no hay objetos con tipos estructurales (solo `Object<T>` homogeneo)
+- no hay auto-GC por heuristica (por ahora `gc()` es manual)
+
+Esto es intencional: queremos primero tener el "esqueleto" correcto, y luego sumar features que realmente lo necesiten.
+
+## Mini ejercicios
+
+1) Implementa auto-GC:
+   - cada N allocs, disparar GC
+   - decide un threshold simple
+
+2) Soporta `arr.push(x)` como builtin:
+   - implica agregar parsing de `.` o un builtin `push(arr, x)`
+
+3) Agrega `Value::Null` y define su interaccion con objects/arrays.

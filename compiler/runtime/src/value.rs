@@ -1,9 +1,15 @@
+use crate::GcRef;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Bool(bool),
     String(String),
     Unit,
+
+    // Heap-allocated values (traced by the GC).
+    Array(GcRef),
+    Object(GcRef),
 }
 
 impl std::fmt::Display for Value {
@@ -13,6 +19,8 @@ impl std::fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::String(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
+            Value::Array(h) => write!(f, "<array@{}>", h.0),
+            Value::Object(h) => write!(f, "<object@{}>", h.0),
         }
     }
 }

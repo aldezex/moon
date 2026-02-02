@@ -6,9 +6,20 @@ version = 4
 name = "moon"
 version = "0.1.0"
 dependencies = [
+ "moon_bytecode",
  "moon_core",
  "moon_interpreter",
+ "moon_runtime",
  "moon_typechecker",
+ "moon_vm",
+]
+
+[[package]]
+name = "moon_bytecode"
+version = "0.1.0"
+dependencies = [
+ "moon_core",
+ "moon_runtime",
 ]
 
 [[package]]
@@ -20,11 +31,26 @@ name = "moon_interpreter"
 version = "0.1.0"
 dependencies = [
  "moon_core",
+ "moon_runtime",
 ]
+
+[[package]]
+name = "moon_runtime"
+version = "0.1.0"
 
 [[package]]
 name = "moon_typechecker"
 version = "0.1.0"
 dependencies = [
  "moon_core",
+]
+
+[[package]]
+name = "moon_vm"
+version = "0.1.0"
+dependencies = [
+ "moon_bytecode",
+ "moon_core",
+ "moon_runtime",
+ "moon_typechecker",
 ]

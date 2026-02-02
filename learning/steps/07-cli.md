@@ -1,60 +1,86 @@
-# 07 - CLI (moon run / moon ast)
+# 07 - CLI (moon run / moon ast / moon check / moon vm)
 
 ## Objetivo
 
-Necesitamos una forma simple de:
-- ejecutar un script `.moon`
-- inspeccionar el AST para debug
+La CLI es el "entrypoint" del repo:
+- lee un archivo (o stdin)
+- corre el pipeline (lex/parse/typecheck/ejecucion)
+- imprime errores con contexto
 
 Archivo:
 - `src/main.rs`
 
-## Comandos actuales
-
-### `moon run <file>`
-
-Pipeline:
-1) Cargar el source:
-   - si `<file>` es `-`, lee de stdin
-   - si no, lee del filesystem
-2) Lexer:
-   - `moon_core::lexer::lex(&source.text)`
-3) Parser:
-   - `moon_core::parser::parse(tokens)`
-4) Typecheck (estricto):
-   - `moon_typechecker::check_program(&program)`
-5) Interpreter:
-   - `moon_interpreter::eval_program(&program)`
-6) Output:
-   - si el valor final no es `Unit`, se imprime
-
-Errores:
-- lex/parse/type/runtime se imprimen usando `source.render_span(span, message)`
-
-### `moon ast <file>`
-
-Hace el mismo pipeline hasta parsear y luego imprime:
-- `println!("{program:#?}")`
-
-Esto es util para validar que el parser arma el AST que esperamos.
-
-### `moon check <file>`
-
-Corre solo:
-- lex -> parse -> typecheck
-
-Y si todo esta bien imprime:
-- `ok: <Type>` (el tipo del programa)
-
-## Por que la CLI no vive dentro de compiler/
-
-Porque `moon` es "la herramienta" (entrypoint), y `compiler/*` son librerias reutilizables:
-- tests
-- embedding (a futuro)
-- herramientas (formatter, lsp, etc.)
-
-## Nota sobre ';' y el valor del programa
+## Convencion clave: ';' y tail expression
 
 Regla estilo Rust:
 - `expr;` descarta el valor (statement)
-- la ultima expresion **sin** `;` es el resultado del programa/bloque
+- la ultima expresion **sin** `;` es el valor del programa/bloque
+
+Ejemplo:
+- `let x = 1; x` imprime `1`
+- `let x = 1; x;` no imprime nada (resultado `Unit`)
+
+## Comandos
+
+### `moon ast <file>`
+
+Pipeline:
+- load -> lex -> parse -> print AST (`{program:#?}`)
+
+Sirve para:
+- debug del parser
+- entender el shape del AST
+
+### `moon check <file>`
+
+Pipeline:
+- load -> lex -> parse -> typecheck
+
+Si pasa:
+- imprime `ok: <Type>`
+
+Si falla:
+- imprime `type error: ...` con span
+
+### `moon run <file>` (interprete)
+
+Pipeline:
+- load -> lex -> parse -> typecheck -> interpreter
+
+Si el valor final no es `Unit`, se imprime.
+
+### `moon vm <file>` (bytecode + VM)
+
+Pipeline:
+- load -> lex -> parse -> typecheck -> compile(bytecode) -> VM
+
+Nota:
+- En esta etapa el "compile error" es raro (la mayoria de cosas ya deberian estar validadas por typecheck/parser).
+
+## Input: file vs stdin
+
+Convencion:
+- si `<file>` es `-`, se lee de stdin
+- si no, se lee del filesystem
+
+Esto permite:
+- `cat examples/hello.moon | cargo run -- run -`
+
+## Errores (como se imprimen)
+
+En la CLI convertimos errores a diagnosticos humanos via:
+- `Source::render_span(span, message)`
+
+Tipos de error:
+- lex error: `LexError` (span del token/char)
+- parse error: `ParseError` (span del token/expr)
+- type error: `TypeError` (span del nodo)
+- runtime error (interpreter): `RuntimeError` (span del nodo)
+- compile error (bytecode): `CompileError` (span del nodo)
+- vm error: (por ahora solo message; a futuro tambien span)
+
+## Mini ejercicios
+
+1) Agrega `moon tokens <file>` que imprima la lista de tokens (kind + span).
+2) Agrega `moon fmt <file>` (aunque sea un stub) para reservar el comando.
+3) En `moon vm`, agrega un flag para imprimir el bytecode antes de ejecutar.

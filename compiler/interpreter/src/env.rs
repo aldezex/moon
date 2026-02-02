@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use moon_core::ast::Expr;
+use moon_runtime::Heap;
 
 use crate::Value;
 
@@ -15,11 +16,17 @@ pub struct Env {
     globals: HashMap<String, Value>,
     scopes: Vec<HashMap<String, Value>>,
     funcs: HashMap<String, Function>,
+    pub heap: Heap,
 }
 
 impl Env {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            globals: HashMap::new(),
+            scopes: Vec::new(),
+            funcs: HashMap::new(),
+            heap: Heap::new(),
+        }
     }
 
     pub fn push_scope(&mut self) {
@@ -47,6 +54,20 @@ impl Env {
         }
     }
 
+    pub fn assign_var(&mut self, name: &str, value: Value) -> Result<(), ()> {
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(name) {
+                scope.insert(name.to_string(), value);
+                return Ok(());
+            }
+        }
+        if self.globals.contains_key(name) {
+            self.globals.insert(name.to_string(), value);
+            return Ok(());
+        }
+        Err(())
+    }
+
     pub fn define_fn(&mut self, name: String, func: Function) {
         self.funcs.insert(name, func);
     }
@@ -61,5 +82,14 @@ impl Env {
 
     pub fn restore_scopes(&mut self, scopes: Vec<HashMap<String, Value>>) {
         self.scopes = scopes;
+    }
+
+    pub fn roots(&self) -> Vec<Value> {
+        let mut roots = Vec::new();
+        roots.extend(self.globals.values().cloned());
+        for scope in &self.scopes {
+            roots.extend(scope.values().cloned());
+        }
+        roots
     }
 }

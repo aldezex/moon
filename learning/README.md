@@ -1,8 +1,20 @@
 # Learning Moon
 
-Esta carpeta documenta, paso a paso, como estamos construyendo **Moon**: un lenguaje de scripting con "vibra Rust" (expresiones, tipos, tooling) pero pensado para iterar rapido como JavaScript/TypeScript.
+Esta carpeta documenta, paso a paso, como estamos construyendo **Moon**: un lenguaje de scripting con "vibra Rust" (expresiones, tipado estricto, tooling) pero pensado para iterar rapido como JavaScript/TypeScript.
 
-La idea es que puedas leer estos capitulos en orden y, en cada paso, abrir el codigo referenciado para ver la implementacion real.
+La idea es que puedas leer estos capitulos en orden y, en cada paso:
+- entiendas el concepto (lexer/parser/AST/typechecker/VM/etc)
+- veas como se traduce a codigo real en Rust (con paths a los archivos)
+- puedas ejecutar el repo en ese punto (tests + CLI)
+
+Si quieres aprender "con las manos", lo mas efectivo es:
+1) leer un paso
+2) abrir los archivos referenciados
+3) correr `cargo test --workspace`
+4) intentar una mini mejora (hay sugerencias/exercises dentro de los capitulos)
+
+Requisitos:
+- Rust estable (cargo)
 
 ## Indice (paso a paso)
 
@@ -36,10 +48,10 @@ La idea es que puedas leer estos capitulos en orden y, en cada paso, abrir el co
 9) Typechecker estricto (moon check)
    - `learning/steps/09-typechecker.md`
 
-10) Runtime y memoria (GC) (diseño)
+10) Runtime y memoria (heap + GC mark/sweep)
    - `learning/steps/10-runtime-and-gc.md`
 
-11) Bytecode + VM (diseño)
+11) Bytecode + VM (AST -> bytecode -> VM)
    - `learning/steps/11-bytecode-and-vm.md`
 
 12) Proximos pasos (roadmap vivo)
@@ -49,14 +61,22 @@ La idea es que puedas leer estos capitulos en orden y, en cada paso, abrir el co
 
 Soportamos:
 - `let name = expr;` (con anotacion opcional: `let x: Int = 1;`)
+- Assignment como statement: `name = expr;` y `target[index] = expr;`
 - Bloques `{ ... }` con scopes y **tail expression** (la ultima expresion sin `;` es el valor del bloque)
 - `if cond { ... } else { ... }` como expresion
 - `fn name(params...) -> Type { ... }` + llamadas `name(args...)`
-- Literales: `Int`, `Bool`, `String`
+- Literales:
+  - `Int`, `Bool`, `String`
+  - Arrays: `[a, b, c]`
+  - Objects (map literal): `#{ key: value, "key2": value2 }`
+- Indexing:
+  - `arr[0]`
+  - `obj["key"]`
 - Expresiones: `+ - * / %`, comparaciones, `== !=`, `&& ||`, `!`, `-expr`, parentesis `(...)`
 - Comentarios de linea `// ...`
 
 Ejecutar:
 - `cargo run -- run examples/hello.moon`
 - `cargo run -- check examples/hello.moon`
+- `cargo run -- vm examples/hello.moon`
 - `cargo test --workspace`

@@ -1,0 +1,12 @@
+[package]
+name = "moon_vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+moon_bytecode = { path = "../bytecode" }
+moon_runtime = { path = "../runtime" }
+
+[dev-dependencies]
+moon_core = { path = "../core" }
+moon_typechecker = { path = "../typechecker" }

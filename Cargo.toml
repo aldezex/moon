@@ -5,9 +5,19 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-members = ["compiler/core", "compiler/interpreter", "compiler/typechecker"]
+members = [
+  "compiler/bytecode",
+  "compiler/core",
+  "compiler/interpreter",
+  "compiler/runtime",
+  "compiler/typechecker",
+  "compiler/vm",
+]
 
 [dependencies]
 moon_core = { path = "compiler/core" }
 moon_interpreter = { path = "compiler/interpreter" }
+moon_runtime = { path = "compiler/runtime" }
 moon_typechecker = { path = "compiler/typechecker" }
+moon_bytecode = { path = "compiler/bytecode" }
+moon_vm = { path = "compiler/vm" }

@@ -1,54 +1,92 @@
-# 08 - Tests y ejemplos
+# 08 - Tests y ejemplos (como validar el lenguaje)
 
-## Ejemplo: hello.moon
+## Por que tests desde el MVP
 
-Archivo:
+En un lenguaje, un cambio pequeno puede romper cosas muy lejos:
+- cambiar precedencia rompe cientos de programas
+- cambiar scoping rompe funciones/blocks
+- cambiar Value rompe interpreter y VM
+
+Por eso:
+- tests unitarios del frontend
+- tests de pipeline (lex -> parse -> eval)
+- tests de VM (lex -> parse -> typecheck -> compile -> run)
+
+La meta no es tener "muchos tests", sino tests que cubran:
+- reglas fundamentales
+- casos borde
+- regressions tipicas
+
+## Ejemplos
+
+Carpeta:
+- `examples/`
+
+Ejemplo actual:
 - `examples/hello.moon`
 
-Hoy el ejemplo solo usa features del MVP:
-- `let`
-- aritmetica + precedencia
-- strings + concatenacion
-- tail expression (sin `;` al final) para que la CLI imprima el resultado
-
-Ejecutar:
-- `cargo run -- run examples/hello.moon`
-- `cargo run -- check examples/hello.moon`
+Tip: manten los examples chicos, pero representativos. Un ejemplo por feature nueva ayuda muchisimo a onboarding.
 
 ## Tests del interpreter
 
 Archivo:
 - `compiler/interpreter/tests/mvp.rs`
 
-La idea de estos tests:
-- Usar el pipeline real: `lex -> parse -> eval`.
-- Probar reglas importantes de semantica:
-  - precedencia aritmetica: `1 + 2 * 3`
-  - precedencia logica: `true && false || true`
-  - concatenacion de strings: `"a" + "b"`
-  - bloques + scopes + tail expression
-  - `if/else` como expresion
-  - funciones y llamadas (incluyendo call-before-definition)
+Que cubre:
+- precedencia aritmetica y logica
+- tail expression
+- blocks + scopes
+- if/else
+- funciones + call-before-definition
+- arrays/objects + indexing + assignment
 
-Ejecutar:
-- `cargo test --workspace`
-
-## Como agregar mas tests
-
-Patron sugerido:
-1) escribe un snippet `.moon` como string
-2) corre `lex/parse/eval`
-3) assert del `Value` final o del error esperado
-
-Si estamos agregando una feature nueva (por ejemplo `if`):
-- agrega primero tests que describan el comportamiento deseado
-- implementa lo minimo para pasarlos
+Patron de test:
+1) crear `Source` desde string
+2) `lex` -> `parse` -> `eval_program`
+3) assert del `Value`
 
 ## Tests del typechecker
 
 Archivo:
 - `compiler/typechecker/tests/typechecker.rs`
 
-Estos tests validan:
-- inferencia basica (`let x = ...`)
-- errores de tipo (mismatch en anotaciones, `if` con ramas distintas, argumentos incorrectos, etc.)
+Que cubre:
+- inferencia basica en lets
+- anotaciones correctas vs mismatch
+- reglas de `if` (cond Bool, ramas mismo tipo)
+- llamadas a funciones (aridad + tipos)
+- arrays/objects:
+  - inferencia
+  - `[]`/`#{}` vacios requieren anotacion
+  - indexing y assignment
+
+Tip:
+- los tests de typechecker deberian assert sobre `message` (no sobre formato exacto del diagnostico) para permitir mejorar mensajes sin romper tests.
+
+## Tests de la VM (bytecode)
+
+Archivo:
+- `compiler/vm/tests/vm.rs`
+
+Pipeline:
+- `lex -> parse -> typecheck -> compile -> vm.run`
+
+Estos tests son cruciales para:
+- verificar que compiler+VM preservan semantica del interpreter
+- detectar bugs de stack discipline (Pop, Return, etc.)
+
+## Ideas para mejorar tests
+
+1) "Golden tests" de diagnosticos:
+   - snapshot de `render_span` para algunos errores comunes
+
+2) Property-based tests (a futuro):
+   - generar expresiones random y comparar:
+     - interpreter vs VM (deben dar mismo valor)
+
+3) Tests por feature:
+   - cada PR que agrega sintaxis nueva deberia traer:
+     - parser tests (AST shape)
+     - typechecker tests
+     - interpreter tests
+     - VM tests (si aplica)

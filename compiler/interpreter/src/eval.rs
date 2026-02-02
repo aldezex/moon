@@ -40,6 +40,31 @@ fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<(), RuntimeError> {
             env.define_var(name.clone(), value);
             Ok(())
         }
+        Stmt::Assign { target, expr, span } => {
+            let value = eval_expr(expr, env)?;
+            match target {
+                Expr::Ident(name, _) => env.assign_var(name, value).map_err(|()| RuntimeError {
+                    message: format!("undefined variable: {name}"),
+                    span: *span,
+                })?,
+                Expr::Index {
+                    target: base,
+                    index,
+                    ..
+                } => {
+                    let base_v = eval_expr(base, env)?;
+                    let index_v = eval_expr(index, env)?;
+                    assign_index(env, base_v, index_v, value, *span)?
+                }
+                _ => {
+                    return Err(RuntimeError {
+                        message: "invalid assignment target".to_string(),
+                        span: *span,
+                    })
+                }
+            }
+            Ok(())
+        }
         Stmt::Fn { .. } => Ok(()),
         Stmt::Expr { expr, .. } => {
             // Expression statement always discards its value.
@@ -58,6 +83,23 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
             message: format!("undefined variable: {name}"),
             span: *sp,
         }),
+        Expr::Array { elements, .. } => {
+            let mut values = Vec::with_capacity(elements.len());
+            for e in elements {
+                values.push(eval_expr(e, env)?);
+            }
+            let handle = env.heap.alloc_array(values);
+            Ok(Value::Array(handle))
+        }
+        Expr::Object { props, .. } => {
+            let mut map = std::collections::HashMap::new();
+            for (k, vexpr) in props {
+                let v = eval_expr(vexpr, env)?;
+                map.insert(k.clone(), v);
+            }
+            let handle = env.heap.alloc_object(map);
+            Ok(Value::Object(handle))
+        }
         Expr::Group { expr, .. } => eval_expr(expr, env),
         Expr::Block { stmts, tail, .. } => {
             env.push_scope();
@@ -106,6 +148,20 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }
             };
 
+            // Builtins (minimal):
+            // - gc(): triggers a GC cycle for heap-allocated objects.
+            if name == "gc" {
+                if !args.is_empty() {
+                    return Err(RuntimeError {
+                        message: "gc() takes no arguments".to_string(),
+                        span: *span,
+                    });
+                }
+                let roots = env.roots();
+                let _ = env.heap.collect_garbage(&roots);
+                return Ok(Value::Unit);
+            }
+
             let func = env.get_fn(name).cloned().ok_or_else(|| RuntimeError {
                 message: format!("undefined function: {name}"),
                 span: *span,
@@ -138,6 +194,15 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
             env.restore_scopes(saved_scopes);
             result
         }
+        Expr::Index {
+            target,
+            index,
+            span,
+        } => {
+            let base_v = eval_expr(target, env)?;
+            let index_v = eval_expr(index, env)?;
+            eval_index(env, base_v, index_v, *span)
+        }
         Expr::Unary { op, expr, span } => {
             let v = eval_expr(expr, env)?;
             match (op, v) {
@@ -153,12 +218,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 }),
             }
         }
-        Expr::Binary {
-            lhs,
-            op,
-            rhs,
-            span,
-        } => match op {
+        Expr::Binary { lhs, op, rhs, span } => match op {
             BinaryOp::And => {
                 let left = eval_expr(lhs, env)?;
                 let lb = match left {
@@ -211,6 +271,100 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
                 eval_binary(*op, l, r, *span)
             }
         },
+    }
+}
+
+fn eval_index(env: &mut Env, base: Value, index: Value, span: Span) -> Result<Value, RuntimeError> {
+    match base {
+        Value::Array(h) => {
+            let idx = match index {
+                Value::Int(i) => usize::try_from(i).map_err(|_| RuntimeError {
+                    message: "array index must be >= 0".to_string(),
+                    span,
+                })?,
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("array index must be int, got {other:?}"),
+                        span,
+                    })
+                }
+            };
+            env.heap
+                .array_get(h, idx)
+                .cloned()
+                .ok_or_else(|| RuntimeError {
+                    message: format!("index out of bounds: {idx}"),
+                    span,
+                })
+        }
+        Value::Object(h) => {
+            let key = match index {
+                Value::String(s) => s,
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("object key must be string, got {other:?}"),
+                        span,
+                    })
+                }
+            };
+            env.heap
+                .object_get(h, &key)
+                .cloned()
+                .ok_or_else(|| RuntimeError {
+                    message: format!("missing key: {key}"),
+                    span,
+                })
+        }
+        other => Err(RuntimeError {
+            message: format!("cannot index into {other:?}"),
+            span,
+        }),
+    }
+}
+
+fn assign_index(
+    env: &mut Env,
+    base: Value,
+    index: Value,
+    value: Value,
+    span: Span,
+) -> Result<(), RuntimeError> {
+    match base {
+        Value::Array(h) => {
+            let idx = match index {
+                Value::Int(i) => usize::try_from(i).map_err(|_| RuntimeError {
+                    message: "array index must be >= 0".to_string(),
+                    span,
+                })?,
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("array index must be int, got {other:?}"),
+                        span,
+                    })
+                }
+            };
+            env.heap
+                .array_set(h, idx, value)
+                .map_err(|e| RuntimeError { message: e, span })
+        }
+        Value::Object(h) => {
+            let key = match index {
+                Value::String(s) => s,
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("object key must be string, got {other:?}"),
+                        span,
+                    })
+                }
+            };
+            env.heap
+                .object_set(h, key, value)
+                .map_err(|e| RuntimeError { message: e, span })
+        }
+        other => Err(RuntimeError {
+            message: format!("cannot assign through index on {other:?}"),
+            span,
+        }),
     }
 }
 

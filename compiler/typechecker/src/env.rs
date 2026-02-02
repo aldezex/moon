@@ -46,7 +46,12 @@ impl TypeEnv {
         self.globals.get(name)
     }
 
-    pub fn define_fn(&mut self, name: String, params: Vec<Type>, ret: Type) -> Result<(), TypeError> {
+    pub fn define_fn(
+        &mut self,
+        name: String,
+        params: Vec<Type>,
+        ret: Type,
+    ) -> Result<(), TypeError> {
         self.funcs.insert(name, FuncSig { params, ret });
         Ok(())
     }

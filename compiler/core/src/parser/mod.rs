@@ -43,7 +43,10 @@ impl Parser {
             None
         };
 
-        self.expect(|k| matches!(k, TokenKind::Equal), "expected '=' after identifier")?;
+        self.expect(
+            |k| matches!(k, TokenKind::Equal),
+            "expected '=' after identifier",
+        )?;
         let expr = self.parse_expr(0)?;
 
         self.expect(
@@ -74,7 +77,10 @@ impl Parser {
             }
         };
 
-        self.expect(|k| matches!(k, TokenKind::LParen), "expected '(' after fn name")?;
+        self.expect(
+            |k| matches!(k, TokenKind::LParen),
+            "expected '(' after fn name",
+        )?;
         let mut params = Vec::new();
         if !matches!(self.peek().kind, TokenKind::RParen) {
             loop {
@@ -89,7 +95,10 @@ impl Parser {
                     }
                 };
 
-                self.expect(|k| matches!(k, TokenKind::Colon), "expected ':' after parameter name")?;
+                self.expect(
+                    |k| matches!(k, TokenKind::Colon),
+                    "expected ':' after parameter name",
+                )?;
                 let ty = self.parse_type()?;
                 let span = param_name_tok.span.merge(ty.span());
                 params.push(Param {
@@ -107,9 +116,15 @@ impl Parser {
                 break;
             }
         }
-        self.expect(|k| matches!(k, TokenKind::RParen), "expected ')' after parameters")?;
+        self.expect(
+            |k| matches!(k, TokenKind::RParen),
+            "expected ')' after parameters",
+        )?;
 
-        self.expect(|k| matches!(k, TokenKind::Arrow), "expected '->' after parameters")?;
+        self.expect(
+            |k| matches!(k, TokenKind::Arrow),
+            "expected '->' after parameters",
+        )?;
         let ret_ty = self.parse_type()?;
 
         let body = self.parse_block_expr()?;
@@ -161,6 +176,8 @@ impl Parser {
             TokenKind::Ident(s) => Ok(Expr::Ident(s, tok.span)),
             TokenKind::If => self.parse_if_expr(tok),
             TokenKind::LBrace => self.parse_block_expr_from_open(tok),
+            TokenKind::LBracket => self.parse_array_expr_from_open(tok),
+            TokenKind::Hash => self.parse_object_expr(tok),
             TokenKind::Minus => {
                 let expr = self.parse_expr(7)?;
                 Ok(Expr::Unary {
@@ -198,6 +215,10 @@ impl Parser {
                 expr = self.parse_call_expr(expr)?;
                 continue;
             }
+            if matches!(self.peek().kind, TokenKind::LBracket) {
+                expr = self.parse_index_expr(expr)?;
+                continue;
+            }
             break;
         }
         Ok(expr)
@@ -228,6 +249,77 @@ impl Parser {
             args,
             span,
         })
+    }
+
+    fn parse_index_expr(&mut self, target: Expr) -> Result<Expr, ParseError> {
+        let open = self.expect(|k| matches!(k, TokenKind::LBracket), "expected '['")?;
+        let index = self.parse_expr(0)?;
+        let close = self.expect(|k| matches!(k, TokenKind::RBracket), "expected ']'")?;
+
+        let span = target.span().merge(open.span).merge(close.span);
+        Ok(Expr::Index {
+            target: Box::new(target),
+            index: Box::new(index),
+            span,
+        })
+    }
+
+    fn parse_array_expr_from_open(&mut self, open: Token) -> Result<Expr, ParseError> {
+        let mut elements = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RBracket) {
+            loop {
+                let elem = self.parse_expr(0)?;
+                elements.push(elem);
+
+                if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                    if matches!(self.peek().kind, TokenKind::RBracket) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.expect(|k| matches!(k, TokenKind::RBracket), "expected ']'")?;
+        let span = open.span.merge(close.span);
+        Ok(Expr::Array { elements, span })
+    }
+
+    fn parse_object_expr(&mut self, hash: Token) -> Result<Expr, ParseError> {
+        self.expect(|k| matches!(k, TokenKind::LBrace), "expected '{' after '#'")?;
+
+        let mut props: Vec<(String, Expr)> = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RBrace) {
+            loop {
+                let key_tok = self.next();
+                let key = match key_tok.kind {
+                    TokenKind::Ident(s) => s,
+                    TokenKind::String(s) => s,
+                    _ => {
+                        return Err(ParseError {
+                            message: "expected object key (identifier or string)".to_string(),
+                            span: key_tok.span,
+                        })
+                    }
+                };
+
+                self.expect(|k| matches!(k, TokenKind::Colon), "expected ':' after key")?;
+                let value = self.parse_expr(0)?;
+                props.push((key, value));
+
+                if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                    if matches!(self.peek().kind, TokenKind::RBrace) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+
+        let close = self.expect(|k| matches!(k, TokenKind::RBrace), "expected '}'")?;
+        let span = hash.span.merge(close.span);
+        Ok(Expr::Object { props, span })
     }
 
     fn parse_if_expr(&mut self, if_tok: Token) -> Result<Expr, ParseError> {
@@ -279,7 +371,10 @@ impl Parser {
         })
     }
 
-    fn parse_sequence(&mut self, terminator: Terminator) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
+    fn parse_sequence(
+        &mut self,
+        terminator: Terminator,
+    ) -> Result<(Vec<Stmt>, Option<Expr>), ParseError> {
         let mut stmts = Vec::new();
         let mut tail = None;
 
@@ -293,8 +388,9 @@ impl Parser {
                     if matches!(terminator, Terminator::RBrace) {
                         let tok = self.peek().clone();
                         return Err(ParseError {
-                            message: "function declarations are only allowed at top-level (for now)"
-                                .to_string(),
+                            message:
+                                "function declarations are only allowed at top-level (for now)"
+                                    .to_string(),
                             span: tok.span,
                         });
                     }
@@ -305,6 +401,31 @@ impl Parser {
             }
 
             let expr = self.parse_expr(0)?;
+
+            // Assignment statement: <lvalue> = <expr>;
+            if self.maybe(|k| matches!(k, TokenKind::Equal)).is_some() {
+                if !is_assignable(&expr) {
+                    return Err(ParseError {
+                        message: "invalid assignment target".to_string(),
+                        span: expr.span(),
+                    });
+                }
+
+                let rhs = self.parse_expr(0)?;
+                self.expect(
+                    |k| matches!(k, TokenKind::Semicolon),
+                    "expected ';' after assignment",
+                )?;
+
+                let span = expr.span().merge(rhs.span());
+                stmts.push(Stmt::Assign {
+                    target: expr,
+                    expr: rhs,
+                    span,
+                });
+                continue;
+            }
+
             if self.maybe(|k| matches!(k, TokenKind::Semicolon)).is_some() {
                 stmts.push(Stmt::Expr {
                     span: expr.span(),
@@ -330,7 +451,34 @@ impl Parser {
     fn parse_type(&mut self) -> Result<TypeExpr, ParseError> {
         let tok = self.next();
         match tok.kind {
-            TokenKind::Ident(name) => Ok(TypeExpr::Named(name, tok.span)),
+            TokenKind::Ident(base) => {
+                let base_span = tok.span;
+                if self.maybe(|k| matches!(k, TokenKind::Less)).is_some() {
+                    let mut args = Vec::new();
+                    if matches!(self.peek().kind, TokenKind::Greater) {
+                        return Err(ParseError {
+                            message: "expected type argument".to_string(),
+                            span: self.peek().span,
+                        });
+                    }
+                    loop {
+                        let ty = self.parse_type()?;
+                        args.push(ty);
+                        if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                            continue;
+                        }
+                        break;
+                    }
+                    let close = self.expect(
+                        |k| matches!(k, TokenKind::Greater),
+                        "expected '>' to close type arguments",
+                    )?;
+                    let span = base_span.merge(close.span);
+                    Ok(TypeExpr::Generic { base, args, span })
+                } else {
+                    Ok(TypeExpr::Named(base, base_span))
+                }
+            }
             _ => Err(ParseError {
                 message: "expected type name".to_string(),
                 span: tok.span,
@@ -410,4 +558,8 @@ impl Parser {
 
 pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     Parser::new(tokens).parse_program()
+}
+
+fn is_assignable(expr: &Expr) -> bool {
+    matches!(expr, Expr::Ident(_, _) | Expr::Index { .. })
 }

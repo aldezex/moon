@@ -9,9 +9,12 @@ Este repo arranca con un MVP pequeno:
 
 Codigo:
 - `compiler/core`: frontend (AST/lexer/parser/spans/diagnosticos)
-- `compiler/interpreter`: interprete (runtime MVP: values/env/eval)
+- `compiler/runtime`: runtime (Value + Heap + GC mark/sweep)
+- `compiler/interpreter`: interprete (tree-walk sobre AST)
 - `compiler/typechecker`: typechecker estricto (`moon check`)
-- `src/main.rs`: CLI (`moon run`, `moon ast`, `moon check`)
+- `compiler/bytecode`: compilador AST -> bytecode
+- `compiler/vm`: VM (bytecode interpreter)
+- `src/main.rs`: CLI (`moon run`, `moon ast`, `moon check`, `moon vm`)
 
 ## Desarrollo
 
@@ -23,6 +26,7 @@ Guia paso a paso:
 Comandos:
 - `cargo run -- run examples/hello.moon`
 - `cargo run -- check examples/hello.moon`
+- `cargo run -- vm examples/hello.moon`
 - `cargo test --workspace`
 
 ## Roadmap (alto nivel)
@@ -30,8 +34,9 @@ Comandos:
 1) Sintaxis + parser con buena recuperacion de errores
 2) Interprete (tree-walk) para iterar rapido en el lenguaje
 3) Typechecking estricto (sin `any` implicito) + inferencia basica/local (implementado MVP)
-4) Bytecode + VM para performance y tooling (REPL rapido, cache, etc.)
-5) Stdlib + FFI / embedding
+4) Runtime (heap + GC) + arrays/objects (implementado MVP)
+5) Bytecode + VM para performance y tooling (implementado MVP)
+6) Stdlib + FFI / embedding
 
 ## Memoria (decision)
 

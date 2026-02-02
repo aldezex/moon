@@ -45,3 +45,45 @@ fn can_typecheck_call_before_definition() {
     let ty = check("f(1); fn f(x: Int) -> Int { x } f(2)").unwrap();
     assert_eq!(ty, Type::Int);
 }
+
+#[test]
+fn infers_array_types_and_indexing() {
+    let ty = check("let a = [1, 2, 3]; a[0]").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn rejects_mixed_array_element_types() {
+    let err = check("let a = [1, true]; a").unwrap_err();
+    assert!(err.contains("array elements"));
+}
+
+#[test]
+fn requires_annotation_for_empty_array_literal() {
+    let err = check("let a = []; a").unwrap_err();
+    assert!(err.contains("empty array"));
+}
+
+#[test]
+fn allows_empty_array_with_annotation() {
+    let ty = check("let a: Array<Int> = []; a").unwrap();
+    assert_eq!(ty, Type::Array(Box::new(Type::Int)));
+}
+
+#[test]
+fn infers_object_types_and_indexing() {
+    let ty = check("let o = #{ a: 1, \"b\": 2 }; o[\"a\"]").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn allows_empty_object_with_annotation() {
+    let ty = check("let o: Object<Int> = #{}; o").unwrap();
+    assert_eq!(ty, Type::Object(Box::new(Type::Int)));
+}
+
+#[test]
+fn rejects_assignment_type_mismatch() {
+    let err = check("let x: Int = 1; x = true; x").unwrap_err();
+    assert!(err.contains("type mismatch"));
+}

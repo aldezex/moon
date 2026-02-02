@@ -45,10 +45,7 @@ impl Source {
         let (line, col) = self.line_col(start);
 
         // Extract the line that contains `start`.
-        let line_start = self.text[..start]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let line_start = self.text[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line_end = self.text[start..]
             .find('\n')
             .map(|i| start + i)
