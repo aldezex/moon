@@ -1,7 +1,7 @@
-use moon_core::eval::{eval_program, Value};
 use moon_core::lexer::lex;
 use moon_core::parser::parse;
 use moon_core::source::Source;
+use moon_interpreter::{eval_program, Value};
 
 fn run(src: &str) -> Value {
     let source = Source::new("<test>", src.to_string());

@@ -8,7 +8,8 @@ Este repo arranca con un MVP pequeno:
 - Spans/diagnosticos basicos para ubicar errores en el source
 
 Codigo:
-- `compiler/core`: frontend + runtime MVP (AST/lexer/parser/eval)
+- `compiler/core`: frontend (AST/lexer/parser/spans/diagnosticos)
+- `compiler/interpreter`: interprete (runtime MVP: values/env/eval)
 - `src/main.rs`: CLI (`moon run`, `moon ast`)
 
 ## Desarrollo

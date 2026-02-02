@@ -1,46 +1,7 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
-use crate::error::RuntimeError;
-use std::collections::HashMap;
+use moon_core::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use moon_core::span::Span;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    Bool(bool),
-    String(String),
-    Unit,
-}
-
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Int(i) => write!(f, "{i}"),
-            Value::Bool(b) => write!(f, "{b}"),
-            Value::String(s) => write!(f, "{s}"),
-            Value::Unit => write!(f, "()"),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Env {
-    vars: HashMap<String, Value>,
-}
-
-impl Env {
-    pub fn new() -> Self {
-        Self {
-            vars: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&Value> {
-        self.vars.get(name)
-    }
-
-    pub fn set(&mut self, name: String, value: Value) {
-        self.vars.insert(name, value);
-    }
-}
+use crate::{Env, RuntimeError, Value};
 
 pub fn eval_program(program: &Program) -> Result<Value, RuntimeError> {
     let mut env = Env::new();
@@ -150,12 +111,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
     }
 }
 
-fn eval_binary(
-    op: BinaryOp,
-    l: Value,
-    r: Value,
-    span: crate::span::Span,
-) -> Result<Value, RuntimeError> {
+fn eval_binary(op: BinaryOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
     use Value::*;
 
     let err = |message: std::string::String| RuntimeError { message, span };

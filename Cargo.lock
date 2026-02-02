@@ -7,8 +7,16 @@ name = "moon"
 version = "0.1.0"
 dependencies = [
  "moon_core",
+ "moon_interpreter",
 ]
 
 [[package]]
 name = "moon_core"
 version = "0.1.0"
+
+[[package]]
+name = "moon_interpreter"
+version = "0.1.0"
+dependencies = [
+ "moon_core",
+]

@@ -1,10 +1,10 @@
 use std::env;
 use std::path::PathBuf;
 
-use moon_core::eval::eval_program;
 use moon_core::lexer::lex;
 use moon_core::parser::parse;
 use moon_core::source::Source;
+use moon_interpreter::{eval_program, Value};
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -75,7 +75,7 @@ fn cmd_run(path: String) -> Result<(), i32> {
         1
     })?;
 
-    if value != moon_core::eval::Value::Unit {
+    if value != Value::Unit {
         println!("{value}");
     }
 
