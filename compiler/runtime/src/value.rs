@@ -7,6 +7,7 @@ pub enum Value {
     String(String),
     Unit,
     Function(String),
+    Closure(GcRef),
 
     // Heap-allocated values (traced by the GC).
     Array(GcRef),
@@ -21,6 +22,7 @@ impl std::fmt::Display for Value {
             Value::String(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
             Value::Function(name) => write!(f, "<fn {name}>"),
+            Value::Closure(h) => write!(f, "<closure@{}>", h.0),
             Value::Array(h) => write!(f, "<array@{}>", h.0),
             Value::Object(h) => write!(f, "<object@{}>", h.0),
         }

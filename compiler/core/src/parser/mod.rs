@@ -161,6 +161,69 @@ impl Parser {
         })
     }
 
+    fn parse_fn_expr(&mut self, fn_tok: Token) -> Result<Expr, ParseError> {
+        self.expect(
+            |k| matches!(k, TokenKind::LParen),
+            "expected '(' after 'fn'",
+        )?;
+
+        let mut params = Vec::new();
+        if !matches!(self.peek().kind, TokenKind::RParen) {
+            loop {
+                let param_name_tok = self.next();
+                let param_name = match param_name_tok.kind {
+                    TokenKind::Ident(s) => s,
+                    _ => {
+                        return Err(ParseError {
+                            message: "expected parameter name".to_string(),
+                            span: param_name_tok.span,
+                        })
+                    }
+                };
+
+                self.expect(
+                    |k| matches!(k, TokenKind::Colon),
+                    "expected ':' after parameter name",
+                )?;
+                let ty = self.parse_type()?;
+                let span = param_name_tok.span.merge(ty.span());
+                params.push(Param {
+                    name: param_name,
+                    ty,
+                    span,
+                });
+
+                if self.maybe(|k| matches!(k, TokenKind::Comma)).is_some() {
+                    if matches!(self.peek().kind, TokenKind::RParen) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+
+        self.expect(
+            |k| matches!(k, TokenKind::RParen),
+            "expected ')' after parameters",
+        )?;
+
+        self.expect(
+            |k| matches!(k, TokenKind::Arrow),
+            "expected '->' after parameters",
+        )?;
+        let ret_ty = self.parse_type()?;
+
+        let body = self.parse_block_expr()?;
+        let span = fn_tok.span.merge(body.span());
+        Ok(Expr::Fn {
+            params,
+            ret_ty,
+            body: Box::new(body),
+            span,
+        })
+    }
+
     fn parse_expr(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.parse_prefix()?;
         lhs = self.parse_postfix(lhs)?;
@@ -197,6 +260,7 @@ impl Parser {
             TokenKind::False => Ok(Expr::Bool(false, tok.span)),
             TokenKind::String(s) => Ok(Expr::String(s, tok.span)),
             TokenKind::Ident(s) => Ok(Expr::Ident(s, tok.span)),
+            TokenKind::Fn => self.parse_fn_expr(tok),
             TokenKind::If => self.parse_if_expr(tok),
             TokenKind::LBrace => self.parse_block_expr_from_open(tok),
             TokenKind::LBracket => self.parse_array_expr_from_open(tok),
@@ -412,17 +476,25 @@ impl Parser {
                     continue;
                 }
                 TokenKind::Fn => {
-                    if matches!(terminator, Terminator::RBrace) {
-                        let tok = self.peek().clone();
-                        return Err(ParseError {
-                            message:
-                                "function declarations are only allowed at top-level (for now)"
-                                    .to_string(),
-                            span: tok.span,
-                        });
+                    // `fn name(...)` is a top-level item; `fn (...)` is an expression.
+                    let next_is_ident = matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_))
+                    );
+
+                    if next_is_ident {
+                        if matches!(terminator, Terminator::RBrace) {
+                            let tok = self.peek().clone();
+                            return Err(ParseError {
+                                message:
+                                    "function declarations are only allowed at top-level (for now)"
+                                        .to_string(),
+                                span: tok.span,
+                            });
+                        }
+                        stmts.push(self.parse_fn_stmt()?);
+                        continue;
                     }
-                    stmts.push(self.parse_fn_stmt()?);
-                    continue;
                 }
                 _ => {}
             }

@@ -109,6 +109,12 @@ pub enum Expr {
     Bool(bool, Span),
     String(String, Span),
     Ident(String, Span),
+    Fn {
+        params: Vec<Param>,
+        ret_ty: TypeExpr,
+        body: Box<Expr>,
+        span: Span,
+    },
     Array {
         elements: Vec<Expr>,
         span: Span,
@@ -162,6 +168,7 @@ impl Expr {
             Expr::Bool(_, sp) => *sp,
             Expr::String(_, sp) => *sp,
             Expr::Ident(_, sp) => *sp,
+            Expr::Fn { span, .. } => *span,
             Expr::Array { span, .. } => *span,
             Expr::Object { span, .. } => *span,
             Expr::Block { span, .. } => *span,

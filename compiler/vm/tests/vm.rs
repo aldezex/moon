@@ -53,6 +53,30 @@ fn functions_are_values_and_can_be_called_indirectly() {
 }
 
 #[test]
+fn anonymous_functions_work() {
+    let v = run_vm("let f = fn(x: Int) -> Int { x + 1 }; f(41)");
+    assert_eq!(v, moon_runtime::Value::Int(42));
+}
+
+#[test]
+fn closures_capture_lexical_variables() {
+    let v = run_vm(
+        "let f = { let x = 10; fn(y: Int) -> Int { x + y } };
+         { let x = 100; f(1) }",
+    );
+    assert_eq!(v, moon_runtime::Value::Int(11));
+}
+
+#[test]
+fn closures_can_mutate_captured_state() {
+    let v = run_vm(
+        "let c = { let x = 0; fn() -> Int { x = x + 1; x } };
+         c() + c()",
+    );
+    assert_eq!(v, moon_runtime::Value::Int(3));
+}
+
+#[test]
 fn arrays_objects_and_assignment() {
     let v = run_vm(
         "let a = [1, 2, 3];

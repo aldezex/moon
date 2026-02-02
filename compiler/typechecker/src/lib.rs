@@ -307,6 +307,37 @@ fn check_expr<S: TypeSink>(
                 });
             }
         }
+        Expr::Fn {
+            params,
+            ret_ty,
+            body,
+            span,
+        } => {
+            let ret = lower_type(ret_ty)?;
+            let mut param_tys = Vec::with_capacity(params.len());
+            for p in params {
+                param_tys.push(lower_type(&p.ty)?);
+            }
+
+            env.push_scope();
+            for (p, ty) in params.iter().zip(param_tys.iter()) {
+                env.define_var(p.name.clone(), ty.clone());
+            }
+            let body_ty = check_expr(body, env, sink, Some(&ret))?;
+            env.pop_scope();
+
+            if !compatible(&ret, &body_ty) {
+                return Err(TypeError {
+                    message: format!("type mismatch: expected {ret}, got {body_ty}"),
+                    span: *span,
+                });
+            }
+
+            Type::Function {
+                params: param_tys,
+                ret: Box::new(ret),
+            }
+        }
 
         Expr::Array { elements, span } => {
             if elements.is_empty() {

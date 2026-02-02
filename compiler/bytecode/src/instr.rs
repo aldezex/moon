@@ -55,6 +55,9 @@ pub enum InstrKind {
     CallValue(usize),
     Return,
 
+    // Closures
+    MakeClosure(String, Vec<String>),
+
     // Heap / aggregates
     MakeArray(usize),
     MakeObject(Vec<String>),
@@ -96,6 +99,10 @@ impl std::fmt::Display for InstrKind {
             InstrKind::Call(id, argc) => write!(f, "Call f{id} argc={argc}"),
             InstrKind::CallValue(argc) => write!(f, "CallValue argc={argc}"),
             InstrKind::Return => write!(f, "Return"),
+
+            InstrKind::MakeClosure(name, captures) => {
+                write!(f, "MakeClosure {name} captures={captures:?}")
+            }
 
             InstrKind::MakeArray(n) => write!(f, "MakeArray {n}"),
             InstrKind::MakeObject(keys) => write!(f, "MakeObject keys={keys:?}"),

@@ -53,6 +53,24 @@ fn allows_functions_as_values_and_indirect_calls() {
 }
 
 #[test]
+fn anonymous_functions_work() {
+    let ty = check("let f = fn(x: Int) -> Int { x + 1 }; f(41)").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn closures_capture_lexical_variables() {
+    let ty = check("let f = { let x = 10; fn(y: Int) -> Int { x + y } }; f(1)").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
+fn closures_can_mutate_captured_state() {
+    let ty = check("let c = { let x = 0; fn() -> Int { x = x + 1; x } }; c() + c()").unwrap();
+    assert_eq!(ty, Type::Int);
+}
+
+#[test]
 fn rejects_calling_non_function_value() {
     let err = check("let x = 1; x(2)").unwrap_err();
     assert!(err.contains("cannot call non-function"));

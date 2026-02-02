@@ -6,9 +6,16 @@ use crate::value::Value;
 pub struct GcRef(pub usize);
 
 #[derive(Debug, Clone)]
+pub struct ClosureObject {
+    pub func_name: String,
+    pub env: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
 pub enum HeapObjectKind {
     Array(Vec<Value>),
     Object(HashMap<String, Value>),
+    Closure(ClosureObject),
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +55,46 @@ impl Heap {
 
     pub fn alloc_object(&mut self, entries: HashMap<String, Value>) -> GcRef {
         self.alloc(HeapObjectKind::Object(entries))
+    }
+
+    pub fn alloc_closure(&mut self, func_name: String, env: HashMap<String, Value>) -> GcRef {
+        self.alloc(HeapObjectKind::Closure(ClosureObject { func_name, env }))
+    }
+
+    pub fn closure_func_name(&self, handle: GcRef) -> Option<&str> {
+        match &self.get(handle)?.kind {
+            HeapObjectKind::Closure(c) => Some(c.func_name.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn closure_get(&self, handle: GcRef, key: &str) -> Option<&Value> {
+        match &self.get(handle)?.kind {
+            HeapObjectKind::Closure(c) => c.env.get(key),
+            _ => None,
+        }
+    }
+
+    pub fn closure_contains(&self, handle: GcRef, key: &str) -> bool {
+        self.closure_get(handle, key).is_some()
+    }
+
+    pub fn closure_set(&mut self, handle: GcRef, key: String, value: Value) -> Result<(), String> {
+        let obj = self.get_mut(handle)?;
+        match obj.kind {
+            HeapObjectKind::Closure(ref mut c) => {
+                c.env.insert(key, value);
+                Ok(())
+            }
+            _ => Err("not a closure".to_string()),
+        }
+    }
+
+    pub fn closure_env_clone(&self, handle: GcRef) -> Option<HashMap<String, Value>> {
+        match &self.get(handle)?.kind {
+            HeapObjectKind::Closure(c) => Some(c.env.clone()),
+            _ => None,
+        }
     }
 
     pub fn array_get(&self, handle: GcRef, idx: usize) -> Option<&Value> {
@@ -145,7 +192,7 @@ impl Heap {
 
     fn mark_value(&mut self, value: &Value) {
         match value {
-            Value::Array(h) | Value::Object(h) => self.mark_object(*h),
+            Value::Array(h) | Value::Object(h) | Value::Closure(h) => self.mark_object(*h),
             Value::Int(_)
             | Value::Bool(_)
             | Value::String(_)
@@ -174,6 +221,12 @@ impl Heap {
             }
             HeapObjectKind::Object(ref map) => {
                 let values: Vec<Value> = map.values().cloned().collect();
+                for v in &values {
+                    self.mark_value(v);
+                }
+            }
+            HeapObjectKind::Closure(ref c) => {
+                let values: Vec<Value> = c.env.values().cloned().collect();
                 for v in &values {
                     self.mark_value(v);
                 }

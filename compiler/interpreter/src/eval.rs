@@ -150,6 +150,20 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
                 span: *sp,
             })
         }
+        Expr::Fn { params, body, .. } => {
+            let name = env.fresh_lambda_name();
+            env.define_fn(
+                name.clone(),
+                Function {
+                    params: params.iter().map(|p| p.name.clone()).collect(),
+                    body: *body.clone(),
+                },
+            );
+
+            let captured = env.capture_visible_locals();
+            let handle = env.heap.alloc_closure(name, captured);
+            Ok(Exec::Value(Value::Closure(handle)))
+        }
 
         Expr::Array { elements, .. } => {
             let mut values = Vec::with_capacity(elements.len());
@@ -231,11 +245,21 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
                 Exec::Return(v, sp) => return Ok(Exec::Return(v, sp)),
             };
 
-            let Value::Function(name) = callee_v else {
-                return Err(RuntimeError {
-                    message: "cannot call non-function value".to_string(),
-                    span: *span,
-                });
+            let (name, closure) = match callee_v {
+                Value::Function(name) => (name, None),
+                Value::Closure(h) => {
+                    let func = env.heap.closure_func_name(h).ok_or_else(|| RuntimeError {
+                        message: "invalid closure handle".to_string(),
+                        span: *span,
+                    })?;
+                    (func.to_string(), Some(h))
+                }
+                other => {
+                    return Err(RuntimeError {
+                        message: format!("cannot call non-function value: {other:?}"),
+                        span: *span,
+                    })
+                }
             };
 
             // Builtins (minimal):
@@ -278,6 +302,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
 
             // New call frame: only globals + function locals. Caller locals are not visible.
             let saved_scopes = env.take_scopes();
+            let saved_closure = env.set_closure(closure);
             env.push_scope();
             for (param, value) in func.params.iter().zip(values) {
                 env.define_var(param.clone(), value);
@@ -285,6 +310,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Exec, RuntimeError> {
 
             let result = eval_expr(&func.body, env);
             env.restore_scopes(saved_scopes);
+            env.set_closure(saved_closure);
 
             match result? {
                 Exec::Value(v) => Ok(Exec::Value(v)),

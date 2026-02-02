@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use moon_bytecode::{FuncId, InstrKind, Module};
 use moon_core::span::Span;
-use moon_runtime::{Heap, Value};
+use moon_runtime::{GcRef, Heap, Value};
 
 use crate::error::VmError;
 
@@ -12,6 +12,7 @@ struct Frame {
     ip: usize,
     stack_base: usize,
     scopes: Vec<HashMap<String, Value>>,
+    closure: Option<GcRef>,
 }
 
 #[derive(Debug)]
@@ -43,6 +44,7 @@ impl Vm {
             ip: 0,
             stack_base: 0,
             scopes: Vec::new(),
+            closure: None,
         });
 
         loop {
@@ -192,7 +194,7 @@ impl Vm {
                     args.reverse();
 
                     let stack_base = self.stack.len();
-                    self.push_call_frame(id, stack_base, args)?;
+                    self.push_call_frame(id, stack_base, args, None)?;
                 }
 
                 InstrKind::CallValue(argc) => {
@@ -204,8 +206,15 @@ impl Vm {
                     args.reverse();
 
                     let callee = self.pop()?;
-                    let name = match callee {
-                        Value::Function(name) => name,
+                    let (name, closure) = match callee {
+                        Value::Function(name) => (name, None),
+                        Value::Closure(h) => {
+                            let func = self
+                                .heap
+                                .closure_func_name(h)
+                                .ok_or_else(|| self.err("invalid closure handle"))?;
+                            (func.to_string(), Some(h))
+                        }
                         other => {
                             return Err(
                                 self.err(format!("cannot call non-function value: {other:?}"))
@@ -239,7 +248,7 @@ impl Vm {
                     }
 
                     let stack_base = self.stack.len();
-                    self.push_call_frame(id, stack_base, args)?;
+                    self.push_call_frame(id, stack_base, args, closure)?;
                 }
 
                 InstrKind::Return => {
@@ -289,6 +298,17 @@ impl Vm {
                     let base = self.pop()?;
                     self.index_set(base, index, value)?;
                 }
+
+                InstrKind::MakeClosure(name, captures) => {
+                    let mut env = HashMap::new();
+                    for cap in captures {
+                        if let Some(v) = self.get_local(frame_idx, &cap) {
+                            env.insert(cap, v);
+                        }
+                    }
+                    let h = self.heap.alloc_closure(name, env);
+                    self.stack.push(Value::Closure(h));
+                }
             }
         }
     }
@@ -302,6 +322,7 @@ impl Vm {
         func: FuncId,
         stack_base: usize,
         args: Vec<Value>,
+        closure: Option<GcRef>,
     ) -> Result<(), VmError> {
         let func_obj = self
             .module
@@ -318,6 +339,7 @@ impl Vm {
             ip: 0,
             stack_base,
             scopes: vec![scope],
+            closure,
         });
         Ok(())
     }
@@ -328,7 +350,26 @@ impl Vm {
                 return Some(v.clone());
             }
         }
+        if let Some(h) = self.frames[frame_idx].closure {
+            if let Some(v) = self.heap.closure_get(h, name) {
+                return Some(v.clone());
+            }
+        }
         self.globals.get(name).cloned()
+    }
+
+    fn get_local(&self, frame_idx: usize, name: &str) -> Option<Value> {
+        for scope in self.frames[frame_idx].scopes.iter().rev() {
+            if let Some(v) = scope.get(name) {
+                return Some(v.clone());
+            }
+        }
+        if let Some(h) = self.frames[frame_idx].closure {
+            if let Some(v) = self.heap.closure_get(h, name) {
+                return Some(v.clone());
+            }
+        }
+        None
     }
 
     fn define_var(&mut self, frame_idx: usize, name: String, value: Value) {
@@ -343,6 +384,14 @@ impl Vm {
         for scope in self.frames[frame_idx].scopes.iter_mut().rev() {
             if scope.contains_key(name) {
                 scope.insert(name.to_string(), value);
+                return Ok(());
+            }
+        }
+        if let Some(h) = self.frames[frame_idx].closure {
+            if self.heap.closure_contains(h, name) {
+                self.heap
+                    .closure_set(h, name.to_string(), value)
+                    .map_err(|e| self.err(e))?;
                 return Ok(());
             }
         }
@@ -468,6 +517,9 @@ impl Vm {
         let mut roots = Vec::new();
         roots.extend(self.globals.values().cloned());
         for frame in &self.frames {
+            if let Some(h) = frame.closure {
+                roots.push(Value::Closure(h));
+            }
             for scope in &frame.scopes {
                 roots.extend(scope.values().cloned());
             }
