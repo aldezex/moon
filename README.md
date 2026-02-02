@@ -14,6 +14,7 @@ Codigo:
 - `compiler/typechecker`: typechecker estricto (`moon check`)
 - `compiler/bytecode`: compilador AST -> bytecode
 - `compiler/vm`: VM (bytecode interpreter)
+- `compiler/lsp`: language server (LSP) para diagnosticos/hover/definition en el editor
 - `src/main.rs`: CLI (`moon run`, `moon ast`, `moon check`, `moon vm`)
 
 ## Desarrollo
@@ -27,6 +28,7 @@ Comandos:
 - `cargo run -- run examples/hello.moon`
 - `cargo run -- check examples/hello.moon`
 - `cargo run -- vm examples/hello.moon`
+- `cargo run -p moon_lsp --bin moon-lsp` (language server via stdio)
 - `cargo test --workspace`
 
 ## Roadmap (alto nivel)

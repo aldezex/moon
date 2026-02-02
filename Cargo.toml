@@ -9,6 +9,7 @@ members = [
   "compiler/bytecode",
   "compiler/core",
   "compiler/interpreter",
+  "compiler/lsp",
   "compiler/runtime",
   "compiler/typechecker",
   "compiler/vm",

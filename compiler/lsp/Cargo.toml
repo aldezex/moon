@@ -1,0 +1,17 @@
+[package]
+name = "moon_lsp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "moon-lsp"
+path = "src/main.rs"
+
+[dependencies]
+moon_core = { path = "../core" }
+moon_typechecker = { path = "../typechecker" }
+
+# LSP implementation
+# Keep versions relatively conservative; this is a learning repo.
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }

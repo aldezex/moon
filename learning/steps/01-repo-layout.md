@@ -32,6 +32,8 @@ Crates (carpeta `compiler/`):
   - `moon_bytecode`: compilador AST -> bytecode (Module + Instr).
 - `compiler/vm`
   - `moon_vm`: VM que ejecuta bytecode.
+- `compiler/lsp`
+  - `moon_lsp`: language server (LSP) para editor (diagnosticos/hover/definition).
 
 Extras:
 - `examples/`: scripts `.moon` para probar.
@@ -61,6 +63,8 @@ moon_runtime <--- moon_interpreter
                             ^
                             |
                            moon (CLI)
+
+moon_core <--- moon_typechecker <--- moon_lsp
 ```
 
 Archivo clave:
@@ -78,6 +82,8 @@ Archivo clave:
   - `cargo run -- check examples/hello.moon`
 - Tests:
   - `cargo test --workspace`
+- Language server (LSP):
+  - `cargo run -p moon_lsp --bin moon-lsp`
 
 ## Regla mental para navegar el codigo
 

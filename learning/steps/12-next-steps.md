@@ -16,6 +16,7 @@ Ya esta implementado y documentado:
 - Typechecking estricto: `learning/steps/09-typechecker.md`
 - Runtime con heap + GC mark/sweep (arrays/objects): `learning/steps/10-runtime-and-gc.md`
 - Bytecode + VM: `learning/steps/11-bytecode-and-vm.md`
+- Language Server (LSP): `learning/steps/13-language-server.md`
 
 Eso nos deja una base "completa" para seguir creciendo sin reescribir todo.
 

@@ -3,13 +3,47 @@ mod error;
 mod types;
 
 use moon_core::ast::{BinaryOp, Expr, Program, Stmt, TypeExpr, UnaryOp};
+use moon_core::span::Span;
 
 pub use error::TypeError;
 pub use types::Type;
 
 use crate::env::TypeEnv;
 
+#[derive(Debug, Clone)]
+pub struct CheckInfo {
+    pub ty: Type,
+    pub expr_types: Vec<(Span, Type)>,
+}
+
 pub fn check_program(program: &Program) -> Result<Type, TypeError> {
+    check_program_with_sink(program, &mut ())
+}
+
+pub fn check_program_with_spans(program: &Program) -> Result<CheckInfo, TypeError> {
+    let mut expr_types = Vec::new();
+    let ty = check_program_with_sink(program, &mut expr_types)?;
+    Ok(CheckInfo { ty, expr_types })
+}
+
+trait TypeSink {
+    fn record(&mut self, span: Span, ty: Type);
+}
+
+impl TypeSink for () {
+    fn record(&mut self, _: Span, _: Type) {}
+}
+
+impl TypeSink for Vec<(Span, Type)> {
+    fn record(&mut self, span: Span, ty: Type) {
+        self.push((span, ty));
+    }
+}
+
+fn check_program_with_sink<S: TypeSink>(
+    program: &Program,
+    sink: &mut S,
+) -> Result<Type, TypeError> {
     let mut env = TypeEnv::new();
 
     // Builtins.
@@ -43,26 +77,26 @@ pub fn check_program(program: &Program) -> Result<Type, TypeError> {
 
     // Pass 2: typecheck statements in order (strict: vars must be defined before use).
     for stmt in &program.stmts {
-        check_stmt(stmt, &mut env)?;
+        check_stmt(stmt, &mut env, sink)?;
     }
 
     match &program.tail {
-        Some(expr) => check_expr(expr, &mut env),
+        Some(expr) => check_expr(expr, &mut env, sink),
         None => Ok(Type::Unit),
     }
 }
 
-fn check_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), TypeError> {
+fn check_stmt<S: TypeSink>(stmt: &Stmt, env: &mut TypeEnv, sink: &mut S) -> Result<(), TypeError> {
     match stmt {
         Stmt::Let { name, ty, expr, .. } => {
             // Minimal contextual typing for empty literals:
-            // `let a: Array<Int> = [];` / `let o: Object<Int> = #{}`
+            // `let a: Array<Int> = [];` / `let o: Object<Int> = #{}'
             let expr_ty = match (expr, ty) {
                 (Expr::Array { elements, .. }, Some(ann)) if elements.is_empty() => {
                     lower_type(ann)?
                 }
                 (Expr::Object { props, .. }, Some(ann)) if props.is_empty() => lower_type(ann)?,
-                _ => check_expr(expr, env)?,
+                _ => check_expr(expr, env, sink)?,
             };
             if let Some(ann) = ty {
                 let ann_ty = lower_type(ann)?;
@@ -78,7 +112,7 @@ fn check_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), TypeError> {
         }
         Stmt::Assign { target, expr, span } => {
             // Assignment is a statement; it must not change the variable type.
-            let rhs_ty = check_expr(expr, env)?;
+            let rhs_ty = check_expr(expr, env, sink)?;
             match target {
                 Expr::Ident(name, sp) => {
                     let var_ty = env.get_var(name).cloned().ok_or_else(|| TypeError {
@@ -98,8 +132,8 @@ fn check_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), TypeError> {
                     index,
                     ..
                 } => {
-                    let base_ty = check_expr(base, env)?;
-                    let index_ty = check_expr(index, env)?;
+                    let base_ty = check_expr(base, env, sink)?;
+                    let index_ty = check_expr(index, env, sink)?;
                     match base_ty {
                         Type::Array(inner) => {
                             if index_ty != Type::Int {
@@ -169,7 +203,7 @@ fn check_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), TypeError> {
                 env.define_var(param.name.clone(), ty.clone());
             }
 
-            let body_ty = check_expr(body, env);
+            let body_ty = check_expr(body, env, sink);
             env.restore_scopes(saved);
 
             let body_ty = body_ty?;
@@ -187,21 +221,25 @@ fn check_stmt(stmt: &Stmt, env: &mut TypeEnv) -> Result<(), TypeError> {
             Ok(())
         }
         Stmt::Expr { expr, .. } => {
-            let _ = check_expr(expr, env)?;
+            let _ = check_expr(expr, env, sink)?;
             Ok(())
         }
     }
 }
 
-fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
-    match expr {
-        Expr::Int(_, _) => Ok(Type::Int),
-        Expr::Bool(_, _) => Ok(Type::Bool),
-        Expr::String(_, _) => Ok(Type::String),
+fn check_expr<S: TypeSink>(
+    expr: &Expr,
+    env: &mut TypeEnv,
+    sink: &mut S,
+) -> Result<Type, TypeError> {
+    let ty = match expr {
+        Expr::Int(_, _) => Type::Int,
+        Expr::Bool(_, _) => Type::Bool,
+        Expr::String(_, _) => Type::String,
         Expr::Ident(name, sp) => env.get_var(name).cloned().ok_or_else(|| TypeError {
             message: format!("undefined variable: {name}"),
             span: *sp,
-        }),
+        })?,
         Expr::Array { elements, span } => {
             if elements.is_empty() {
                 return Err(TypeError {
@@ -209,9 +247,9 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                     span: *span,
                 });
             }
-            let first = check_expr(&elements[0], env)?;
+            let first = check_expr(&elements[0], env, sink)?;
             for elem in &elements[1..] {
-                let ty = check_expr(elem, env)?;
+                let ty = check_expr(elem, env, sink)?;
                 if ty != first {
                     return Err(TypeError {
                         message: format!(
@@ -221,7 +259,7 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                     });
                 }
             }
-            Ok(Type::Array(Box::new(first)))
+            Type::Array(Box::new(first))
         }
         Expr::Object { props, span } => {
             if props.is_empty() {
@@ -230,9 +268,9 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                     span: *span,
                 });
             }
-            let first = check_expr(&props[0].1, env)?;
+            let first = check_expr(&props[0].1, env, sink)?;
             for (_, value) in &props[1..] {
-                let ty = check_expr(value, env)?;
+                let ty = check_expr(value, env, sink)?;
                 if ty != first {
                     return Err(TypeError {
                         message: format!(
@@ -242,22 +280,22 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                     });
                 }
             }
-            Ok(Type::Object(Box::new(first)))
+            Type::Object(Box::new(first))
         }
-        Expr::Group { expr, .. } => check_expr(expr, env),
+        Expr::Group { expr, .. } => check_expr(expr, env, sink)?,
         Expr::Block { stmts, tail, .. } => {
             env.push_scope();
             let result = (|| {
                 for stmt in stmts {
-                    check_stmt(stmt, env)?;
+                    check_stmt(stmt, env, sink)?;
                 }
                 match tail {
-                    Some(expr) => check_expr(expr, env),
+                    Some(expr) => check_expr(expr, env, sink),
                     None => Ok(Type::Unit),
                 }
             })();
             env.pop_scope();
-            result
+            result?
         }
         Expr::If {
             cond,
@@ -265,15 +303,15 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
             else_branch,
             span,
         } => {
-            let cond_ty = check_expr(cond, env)?;
+            let cond_ty = check_expr(cond, env, sink)?;
             if cond_ty != Type::Bool {
                 return Err(TypeError {
                     message: format!("if condition must be Bool, got {cond_ty}"),
                     span: *span,
                 });
             }
-            let then_ty = check_expr(then_branch, env)?;
-            let else_ty = check_expr(else_branch, env)?;
+            let then_ty = check_expr(then_branch, env, sink)?;
+            let else_ty = check_expr(else_branch, env, sink)?;
             if then_ty != else_ty {
                 return Err(TypeError {
                     message: format!(
@@ -282,7 +320,7 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                     span: *span,
                 });
             }
-            Ok(then_ty)
+            then_ty
         }
         Expr::Call { callee, args, span } => {
             let name = match &**callee {
@@ -311,8 +349,17 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                 });
             }
 
+            // Record the callee's function type on the identifier span.
+            sink.record(
+                callee.span(),
+                Type::Function {
+                    params: sig.params.clone(),
+                    ret: Box::new(sig.ret.clone()),
+                },
+            );
+
             for (arg_expr, param_ty) in args.iter().zip(sig.params.iter()) {
-                let arg_ty = check_expr(arg_expr, env)?;
+                let arg_ty = check_expr(arg_expr, env, sink)?;
                 if &arg_ty != param_ty {
                     return Err(TypeError {
                         message: format!(
@@ -323,15 +370,15 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                 }
             }
 
-            Ok(sig.ret.clone())
+            sig.ret.clone()
         }
         Expr::Index {
             target,
             index,
             span,
         } => {
-            let base = check_expr(target, env)?;
-            let idx = check_expr(index, env)?;
+            let base = check_expr(target, env, sink)?;
+            let idx = check_expr(index, env, sink)?;
             match base {
                 Type::Array(inner) => {
                     if idx != Type::Int {
@@ -340,7 +387,7 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                             span: *span,
                         });
                     }
-                    Ok(*inner)
+                    *inner
                 }
                 Type::Object(inner) => {
                     if idx != Type::String {
@@ -349,16 +396,18 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                             span: *span,
                         });
                     }
-                    Ok(*inner)
+                    *inner
                 }
-                other => Err(TypeError {
-                    message: format!("cannot index into {other}"),
-                    span: *span,
-                }),
+                other => {
+                    return Err(TypeError {
+                        message: format!("cannot index into {other}"),
+                        span: *span,
+                    })
+                }
             }
         }
         Expr::Unary { op, expr, span } => {
-            let inner = check_expr(expr, env)?;
+            let inner = check_expr(expr, env, sink)?;
             match op {
                 UnaryOp::Neg => {
                     if inner != Type::Int {
@@ -367,7 +416,7 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                             span: *span,
                         });
                     }
-                    Ok(Type::Int)
+                    Type::Int
                 }
                 UnaryOp::Not => {
                     if inner != Type::Bool {
@@ -376,25 +425,23 @@ fn check_expr(expr: &Expr, env: &mut TypeEnv) -> Result<Type, TypeError> {
                             span: *span,
                         });
                     }
-                    Ok(Type::Bool)
+                    Type::Bool
                 }
             }
         }
         Expr::Binary { lhs, op, rhs, span } => {
-            let l = check_expr(lhs, env)?;
-            let r = check_expr(rhs, env)?;
-            check_binary(*op, l, r, *span)
+            let l = check_expr(lhs, env, sink)?;
+            let r = check_expr(rhs, env, sink)?;
+            check_binary(*op, l, r, *span)?
         }
-    }
+    };
+
+    sink.record(expr.span(), ty.clone());
+    Ok(ty)
 }
 
-fn check_binary(
-    op: BinaryOp,
-    l: Type,
-    r: Type,
-    span: moon_core::span::Span,
-) -> Result<Type, TypeError> {
-    let err = |message: std::string::String| TypeError { message, span };
+fn check_binary(op: BinaryOp, l: Type, r: Type, span: Span) -> Result<Type, TypeError> {
+    let err = |message: String| TypeError { message, span };
 
     match op {
         BinaryOp::Add => match (&l, &r) {
